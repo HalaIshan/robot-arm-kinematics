@@ -18,7 +18,7 @@ def Rot(angle, axis):
     return R
     
 class SimpleArm:
-    def __init__(self, n=3):
+    def __init__(self, link_lengths=None):
         # a simple arm with n unit length links connected by hinge joints
         # The base is assumed to be at the origin
         # The joints are assumed to be at the end of each link, with the first joint at the base and the last joint at the end effector
@@ -26,15 +26,18 @@ class SimpleArm:
         # The axis of rotation for each joint are assumed to be the z-axis
         # The arm is initialized to lie along the x-axis
         
-        self.n = n # number of links
+        if link_lengths is None:
+            link_lengths = [1, 1, 1]  # Default 3 links of length 1
+        self.link_lengths = link_lengths
+        self.n = len(link_lengths)
         self.angles = [0]*self.n # joint angles, starting from the base joint to the end effector
         
         # self.Jl is a matrix that contains joints position in local coordinates.
         # Each row contains the coordinates of a joint
         # Number of joints is n+1, including the base and end effector
         self.Jl = np.zeros((self.n+1, 3)) 
-        for i in range(1,n+1): # we start from 1 because the base joint is at the origin (0,0,0) and finish the end effector is at the end of the last link
-            self.Jl[i,:] = np.array([1, 0, 0]) # initialize joint positions to lie along the x-axis
+        for i in range(1,self.n + 1): # we start from 1 because the base joint is at the origin (0,0,0) and finish the end effector is at the end of the last link
+            self.Jl[i,:] = np.array([self.link_lengths[i - 1], 0, 0]) # initialize joint positions to lie along the x-axis
 
         self.Jw = np.zeros((self.n+1, 3)) # joint positions in world coordinates
         self.FK()
@@ -48,21 +51,14 @@ class SimpleArm:
         
         # Initial rotation matrix
         Ri = np.eye(3)
+        self.Jw[0, :] = np.array([0, 0, 0])  # Base position is always at the origin
 
-        # First joint
-        Ri_1 = Rot(self.angles[0], [0, 0, 1]) @ Ri  # Compute the rotation matrix for the first joint
-        self.Jw[1, :] = Ri_1 @ self.Jl[1, :] + self.Jw[0, :]  # Update the position of the first joint in world coordinates
-
-        # Second joint
-        Ri_2 = Rot(self.angles[1], [0, 0, 1]) @ Ri_1
-        self.Jw[2, :] = Ri_2 @ self.Jl[2, :] + self.Jw[1, :]
-
-        # Third joint
-        Ri_3 = Rot(self.angles[2], [0, 0, 1]) @ Ri_2
-        self.Jw[3, :] = Ri_3 @ self.Jl[3, :] + self.Jw[2, :]
-
+        for i in range(1, self.n + 1):
+            Ri = Rot(self.angles[i - 1], [0, 0, 1]) @ Ri
+            self.Jw[i, :] = Ri @ self.Jl[i, :] + self.Jw[i - 1, :]
 
         return self.Jw[-1,:] # return the position of the end effector
+        
         
     def IK(self, target):
         # calculate the inverse kinematics of the arm
@@ -109,7 +105,7 @@ def LeftButtonPress(evt):
     plt.render()
 
 
-arm = SimpleArm(3)
+arm = SimpleArm(link_lengths=[1, 2, 0.5])  # Example arbitrary lengths
 plt = vd.Plotter()
 plt += arm.draw()
 plt += vd.Sphere(pos = IK_target, r=0.05, c='b').draggable(True)
