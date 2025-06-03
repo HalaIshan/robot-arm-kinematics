@@ -99,13 +99,17 @@ def OnCurrentJoint(widget, event):
 
 def LeftButtonPress(evt):
     global IK_target
-    IK_target = evt.picked3d
-    plt.remove("Sphere")
-    plt.add(vd.Sphere(pos = IK_target, r=0.05, c='b'))
-    plt.render()
+    picked = evt.picked3d
+    if picked is not None:
+        IK_target = picked
+        plt.remove("Sphere")
+        plt.add(vd.Sphere(pos=IK_target, r=0.05, c='b'))
+        plt.render()
+    else:
+        print("No valid point picked — click on the plane or geometry.")
 
 
-arm = SimpleArm(link_lengths=[1, 2, 0.5])  # Example arbitrary lengths
+arm = SimpleArm(link_lengths=[1, 0.5, 1.2, 0.5,2]) 
 plt = vd.Plotter()
 plt += arm.draw()
 plt += vd.Sphere(pos = IK_target, r=0.05, c='b').draggable(True)
