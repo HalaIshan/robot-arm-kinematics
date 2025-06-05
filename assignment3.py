@@ -4,6 +4,11 @@ vd.settings.default_backend= 'vtk'
 import numpy as np
 
 #%% class for a robot arm
+
+# Define joint_colors BEFORE the class/methods that rely on it.
+joint_colors = ["gray", "red", "green", "blue", "orange"]
+
+
 def Rot(angle, axis):
     # calculate the rotation matrix for a given angle and axis using Rodrigues' formula
     # return a 3x3 numpy array
@@ -63,7 +68,41 @@ class SimpleArm:
         # calculate the inverse kinematics of the arm
         # target is the position of the end effector in world coordinates
         # return a list of joint angles
-        pass
+        
+        # 1) Set solver parameters
+        max_iters = 1000
+        tol = 1e-3
+        alpha = 0.1
+
+        # 2) Ensure target is a NumPy array
+        target = np.array(target)
+
+        for _ in range(max_iters):
+            # 3) Compute current end-effector position (also updates self.Jw)
+            p_end = self.FK()
+
+            # 4) Compute position error
+            error = target - p_end
+            if np.linalg.norm(error) < tol:
+                break
+
+            # 5) Compute current Jacobian (3×n)
+            J = self.VelocityJacobian()
+
+            # 6) Jacobian-transpose update: Δθ = α * J^T * error
+            delta_theta = alpha * (J.T @ error)
+
+            # 7) Apply the update to each joint angle
+            for i in range(self.n):
+                self.angles[i] += delta_theta[i]
+
+            # 8) Wrap each angle into [-π, π] for stability
+            for i in range(self.n):
+                a = self.angles[i]
+                self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+
+        return self.angles
+
     
     
     def VelocityJacobian(self, angles=None):
@@ -135,21 +174,53 @@ def OnCurrentJoint(widget, event):
 
 
 def LeftButtonPress(evt):
-    global IK_target
+    global IK_target, arm, plt
     picked = evt.picked3d
     if picked is not None:
         IK_target = picked
+
+        # 1) Draw or move the blue target sphere
         plt.remove("Sphere")
-        plt.add(vd.Sphere(pos=IK_target, r=0.05, c='b'))
+        sph = vd.Sphere(pos=IK_target, r=0.05, c='b')
+        sph.name = "Sphere"
+        plt += sph
+
+        # 2) Run your IK solver to update all joint angles
+        arm.IK(IK_target)
+
+        # 3) Recompute FK with the new angles, then redraw the arm
+        arm.FK()
+        plt.remove("ARM")
+        new_arm = arm.draw()
+        new_arm.name = "ARM"
+        plt += new_arm
+
+        # 4) Remove any old Jacobian arrows and draw updated ones at the new end-effector
+        for i in range(arm.n):
+            plt.remove(f"JointCol_{i}")
+
+        J = arm.VelocityJacobian()
+        p_end = arm.Jw[-1, :]
+        scale = 0.3
+        for i in range(arm.n):
+            col = J[:, i]
+            if np.linalg.norm(col) < 1e-8:
+                continue
+            head = p_end + scale * col
+            arrow = vd.Arrow(p_end, head, c=joint_colors[i])
+            arrow.name = f"JointCol_{i}"
+            plt += arrow
+
         plt.render()
+
     else:
         print("No valid point picked — click on the plane or geometry.")
 
 
 
 
-arm = SimpleArm(link_lengths=[1, 0.5, 1, 2]) 
-joint_colors = ["gray", "red", "green", "blue", "orange"]  
+
+arm = SimpleArm(link_lengths=[1, 1, 1, 1]) 
 plt = vd.Plotter()
 arm_actor = arm.draw()
 arm_actor.name = "ARM"
@@ -172,7 +243,10 @@ for i in range(arm.n):
     plt += arrow
 # ───────────────────────────────────────────────────────────────────────────────
 
-plt += vd.Sphere(pos = IK_target, r=0.05, c='b').draggable(True)
+sph = vd.Sphere(pos=IK_target, r=0.05, c='b').draggable(True)
+sph.name = "Sphere"
+plt += sph
+
 plt += vd.Plane(s=[2.1*arm.n,2.1*arm.n]) # a plane to catch mouse events
 sliderCurrentJoint = plt.add_slider(OnCurrentJoint, 0, arm.n-1, 0, title="Current joint", pos=3, delayed=True)
 sliderAngle =  plt.add_slider(OnSliderAngle,-np.pi,np.pi,0., title="Joint Angle", pos=4)

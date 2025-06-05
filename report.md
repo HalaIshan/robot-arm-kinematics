@@ -55,3 +55,69 @@ gives the instantaneous linear velocity of the end effector when joint \(i\) rot
 > When I adjust any joint angle, the corresponding arrow updates immediately, confirming that the Jacobian implementation is correct.
 
 
+
+
+### Task 2.2: Gradient Descent–Based IK (Jacobian Transpose)
+
+I implemented a Jacobian‐transpose IK solver inside `SimpleArm.IK(target)` and adapted the GUI so that a left‐click both spawns a blue target sphere and drives the arm toward that point via gradient descent. Below is a concise summary, followed by two example screenshots.
+
+#### IK Solver Highlights
+
+1. **Parameters**  
+   - `max_iters = 1000`, `tol = 1e-3`, `alpha = 0.1` (step size).  
+   - Joint angles are wrapped into [−π, π] every iteration to prevent numerical drift.
+
+2. **Iteration Loop**  
+   1. Compute current end-effector position:  
+      ```python
+      p_end = self.FK()
+      ```  
+   2. Compute position error:  
+      ```python
+      error = target - p_end
+      if np.linalg.norm(error) < tol:
+          break
+      ```  
+   3. Form the Jacobian:  
+      ```python
+      J = self.VelocityJacobian()
+      ```  
+   4. Perform a Jacobian-transpose update:  
+      ```python
+      delta = alpha * (J.T @ error)
+      self.angles += delta
+      ```  
+   5. Wrap each angle to [−π, π]:  
+      ```python
+      for i in range(self.n):
+          a = self.angles[i]
+          self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+      ```  
+
+   This loop repeats until the tip is within `tol` (≈1 mm) of the target or until `max_iters` is reached.
+
+3. **Why This Approach?**  
+   - **Jacobian Transpose**: avoids computing a matrix inverse, works well near singularities, and is simple to implement.  
+   - **Early Stopping**: breaks out of the loop as soon as the tip error is small, saving computation.  
+   - **Angle Wrapping**: ensures angles remain bounded in [−π, π], preventing cumulative wrap-around drift.
+
+#### GUI Adaptation
+
+- **Left-Click** on the plane:  
+  1. Draw or move a blue sphere at `IK_target`.  
+  2. Call `arm.IK(IK_target)`, which updates all joint angles so that `FK()` moves the end-effector toward the sphere.  
+  3. Recompute FK, redraw the arm in its new configuration, and refresh the Jacobian arrows at the new end-effector.  
+- **Unreachable Targets**: if the clicked point lies beyond the maximum reach (sum of link lengths), the arm simply stretches as far as possible in that direction. The solver cannot converge exactly, but it still minimizes the error.
+
+#### Example 1 (Reachable Target)
+
+![IK Reachable Example](images/ik_reachable_example.png)
+
+
+#### Example 2 (Near-Vertical Reach)
+
+![IK Vertical Example](images/ik_vertical_example.png)
+
+
+
+
