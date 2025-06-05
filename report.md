@@ -27,3 +27,31 @@ To demonstrate this, I created a 5-joint arm using the configuration `[1, 0.5, 1
 **Resulting pose with 5 joints:**
 
 ![Generalized FK 5-Joint Example](images/fk_five_joints_demo.png)
+
+
+
+## Task 2: Gradient Descent-based IK (the Jacobian Transpose method)
+
+### Task 2.1: Velocity Jacobian & Column Visualization
+
+I implemented `VelocityJacobian()` so that each column  
+\[
+J_{:,i} = \mathbf{z} \times (p_{\text{end}} - p_i)
+\]
+gives the instantaneous linear velocity of the end effector when joint \(i\) rotates. To verify correctness, I drew each column as a colored arrow anchored at the end effector:
+
+- **Color scheme:**  
+  - Base (joint 0): gray  
+  - Joint 1: red  
+  - Joint 2: green  
+  - Joint 3: blue  
+- **Arrow direction:** perpendicular to the vector from joint \(i\) to the end effector, matching the lecture’s “tip-anchored” Jacobian diagram.  
+- **Scaling:** arrows are scaled for visibility; their directions exactly match \(\mathbf{z} \times (p_{\text{end}} - p_i)\).
+
+**Screenshot showing all columns at the end effector:**
+
+![Jacobian Columns Visualization](images/jacobian_columns_demo.png)
+
+> When I adjust any joint angle, the corresponding arrow updates immediately, confirming that the Jacobian implementation is correct.
+
+

@@ -18,7 +18,7 @@ def Rot(angle, axis):
     return R
     
 class SimpleArm:
-    def __init__(self, link_lengths=None):
+    def __init__(self,  link_lengths=None):
         # a simple arm with n unit length links connected by hinge joints
         # The base is assumed to be at the origin
         # The joints are assumed to be at the end of each link, with the first joint at the base and the last joint at the end effector
@@ -59,24 +59,38 @@ class SimpleArm:
 
         return self.Jw[-1,:] # return the position of the end effector
         
-        
     def IK(self, target):
         # calculate the inverse kinematics of the arm
         # target is the position of the end effector in world coordinates
         # return a list of joint angles
         pass
     
+    
     def VelocityJacobian(self, angles=None):
         # calculate the velocity jacobian of the arm
         # return a 3x3 numpy array
-        pass
+        if angles is not None:
+            self.FK(angles)
+        else:
+            self.FK()
+
+        z_axis = np.array([0, 0, 1])
+        p_end = self.Jw[-1, :]
+        J = np.zeros((3, self.n))
+
+        for i in range(self.n):
+            p_i = self.Jw[i, :]
+            J[:, i] = np.cross(z_axis, p_end - p_i)
+            
+        return J
+    
 
     def draw(self):
         vd_arm = vd.Assembly()
-        vd_arm += vd.Sphere(pos = self.Jw[0,:], r=0.05)
+        vd_arm += vd.Sphere(pos = self.Jw[0,:], r=0.05 , c=joint_colors[0])
         for i in range(1,self.n+1):
             vd_arm += vd.Cylinder(pos = [self.Jw[i-1,:], self.Jw[i,:]], r=0.02)
-            vd_arm += vd.Sphere(pos = self.Jw[i,:], r=0.05)
+            vd_arm += vd.Sphere(pos = self.Jw[i,:], r=0.05, c=joint_colors[i])
         return vd_arm
         
 
@@ -84,12 +98,35 @@ class SimpleArm:
 activeJoint = 0
 IK_target = [1,1,0]
 def OnSliderAngle(widget, event):
-    global activeJoint
+    global activeJoint, arm, plt
     arm.angles[activeJoint] = widget.value
     arm.FK()
-    plt.remove("Assembly")
-    plt.add(arm.draw())
+
+    plt.remove("ARM")
+    arm_actor = arm.draw()
+    arm_actor.name = "ARM"
+    plt += arm_actor
+
+    for i in range(arm.n):
+        plt.remove(f"JointCol_{i}")
+
+    J = arm.VelocityJacobian()
+    p_end = arm.Jw[-1, :]
+    scale = 0.3
+
+    for i in range(arm.n):
+        col = J[:, i]
+        if np.linalg.norm(col) < 1e-8:
+            continue
+
+        head = p_end + scale * col
+        color = joint_colors[i]
+        arrow = vd.Arrow(p_end, head, c=color)
+        arrow.name = f"JointCol_{i}"
+        plt += arrow
+
     plt.render()
+
 
 def OnCurrentJoint(widget, event):
     global activeJoint
@@ -109,9 +146,32 @@ def LeftButtonPress(evt):
         print("No valid point picked — click on the plane or geometry.")
 
 
-arm = SimpleArm(link_lengths=[1, 0.5, 1.2, 0.5,2]) 
+
+
+arm = SimpleArm(link_lengths=[1, 0.5, 1, 2]) 
+joint_colors = ["gray", "red", "green", "blue", "orange"]  
 plt = vd.Plotter()
-plt += arm.draw()
+arm_actor = arm.draw()
+arm_actor.name = "ARM"
+plt += arm_actor
+
+# ─── 2) Draw initial arrows, all anchored at p_end ────────────────────────────
+J_init = arm.VelocityJacobian()
+p_end = arm.Jw[-1, :]
+scale = 0.3
+
+for i in range(arm.n):
+    col = J_init[:, i]
+    if np.linalg.norm(col) < 1e-8:
+        continue
+
+    head = p_end + scale * col
+    color = joint_colors[i]
+    arrow = vd.Arrow(p_end, head, c=color)
+    arrow.name = f"JointCol_{i}"
+    plt += arrow
+# ───────────────────────────────────────────────────────────────────────────────
+
 plt += vd.Sphere(pos = IK_target, r=0.05, c='b').draggable(True)
 plt += vd.Plane(s=[2.1*arm.n,2.1*arm.n]) # a plane to catch mouse events
 sliderCurrentJoint = plt.add_slider(OnCurrentJoint, 0, arm.n-1, 0, title="Current joint", pos=3, delayed=True)
@@ -121,4 +181,4 @@ plt.user_mode('2d').show(zoom="tightest")
 
 plt.close()
 
-# %%
+# %% 
