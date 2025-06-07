@@ -7,6 +7,8 @@ import numpy as np
 
 # Define joint_colors BEFORE the class/methods that rely on it.
 joint_colors = ["gray", "red", "green", "blue", "orange"]
+MODE = 'JT'  # 'JT' = Jacobian-Transpose, 'GN' = Gauss–Newton
+
 
 
 def Rot(angle, axis):
@@ -64,64 +66,58 @@ class SimpleArm:
 
         return self.Jw[-1,:] # return the position of the end effector
         
-    def IK(self, target):
+
+
+    def preprocess_target(self, target):
+        # Clip unreachable
+        max_reach = sum(self.link_lengths)
+        d = np.linalg.norm(target[:2])
+        if d > max_reach:
+            target[:2] *= (max_reach - 1e-3)/d
+        # Break singular
+        if all(abs(abs(a)-np.pi)<1e-6 or abs(a)<1e-6 for a in self.angles):
+            self.angles[0] += 1e-3
+        return target
+  
+    def IK_JT(self, target):
         # calculate the inverse kinematics of the arm
         # target is the position of the end effector in world coordinates
         # return a list of joint angles
-        # 1) Solver params
+
+        print(">>> Running Jacobian-Transpose IK <<<")
+        target = self.preprocess_target(target.copy())
         max_iters = 1000
         tol       = 1e-3
         alpha     = 0.1
 
-        # 2) Convert to array
         target = np.array(target)
 
-        # ────────────────────────────────────────────────────────────────
-        # [A] Clip unreachable targets onto the max‐reach circle
         max_reach = sum(self.link_lengths)
         d = np.linalg.norm(target[:2])
         if d > max_reach:
             target[:2] *= (max_reach - 1e-3) / d
-        # ────────────────────────────────────────────────────────────────
 
-        # ────────────────────────────────────────────────────────────────
-        # [B] Break singular straight‐line start by a tiny perturbation
-        #     (so Jacobian is full rank)
         if all(abs(abs(a) - np.pi) < 1e-6 or abs(a) < 1e-6 for a in self.angles):
             self.angles[0] += 1e-3
-        # ────────────────────────────────────────────────────────────────
 
         prev_err = np.inf
         for it in range(max_iters):
-            # 3) FK → self.Jw, p_end
             p_end = self.FK()
-
-            # 4) 2D position error
             error = target[:2] - p_end[:2]
             err_norm = np.linalg.norm(error)
             if err_norm < tol:
                 print(f"IK converged in {it} iterations (error {err_norm:.4f})")
                 break
-
-            # 5) Adaptive α: if error grew, damp step size
             if err_norm > prev_err:
                 alpha *= 0.5
             prev_err = err_norm
-
-            # 6) Build 2×n Jacobian
             J2D = self.VelocityJacobian()[:2, :]
-
-            # 7) JT update
             delta_theta = alpha * (J2D.T @ error)
 
-            # ───────────────────────────────────────────────────────
-            # [C] Early exit on vanishing Δθ (singularity/stuck)
             if np.linalg.norm(delta_theta) < 1e-4:
                 print(f"Δθ too small at iter {it}, exiting (error {err_norm:.4f})")
                 break
-            # ───────────────────────────────────────────────────────
-
-            # 8) Apply and wrap angles
+        
             for i in range(self.n):
                 self.angles[i] += delta_theta[i]
                 self.angles[i] = np.arctan2(np.sin(self.angles[i]),
@@ -132,6 +128,19 @@ class SimpleArm:
         return self.angles
 
     
+    def IK_GN(self, target):
+        print(">>> Running Gauss-Newton IK <<<")
+        target = self.preprocess_target(target.copy())
+        max_iters, tol, alpha = 1000, 1e-3, 0.1
+        for it in range(max_iters):
+            p_end = self.FK()
+            error = target[:2] - p_end[:2]
+            if np.linalg.norm(error) < tol: break
+            J2D = self.VelocityJacobian()[:2,:]
+            delta = alpha * (np.linalg.pinv(J2D) @ error)
+            if np.linalg.norm(delta) < 1e-4: break
+            self.angles = [np.arctan2(np.sin(a+da), np.cos(a+da))
+                           for a, da in zip(self.angles, delta)]
     
     def VelocityJacobian(self, angles=None):
         # calculate the velocity jacobian of the arm
@@ -159,6 +168,7 @@ class SimpleArm:
             vd_arm += vd.Cylinder(pos = [self.Jw[i-1,:], self.Jw[i,:]], r=0.02)
             vd_arm += vd.Sphere(pos = self.Jw[i,:], r=0.05, c=joint_colors[i])
         return vd_arm
+    
         
 
 #%%
@@ -202,10 +212,10 @@ def OnCurrentJoint(widget, event):
 
 
 def LeftButtonPress(evt):
-    global IK_target, arm, plt
+    global IK_target, arm, plt, MODE
     picked = evt.picked3d
     if picked is not None:
-        IK_target = picked
+        IK_target = np.array(picked)
 
         # 1) Draw or move the blue target sphere
         plt.remove("Sphere")
@@ -213,42 +223,56 @@ def LeftButtonPress(evt):
         sph.name = "Sphere"
         plt += sph
 
-        # 2) Run your IK solver to update all joint angles
-        arm.IK(IK_target)
+        # 2) Run the selected IK solver
+        if MODE == 'JT':
+            arm.IK_JT(IK_target)
+        else:
+            arm.IK_GN(IK_target)
 
-        # 3) Recompute FK with the new angles, then redraw the arm
+        # 3) Recompute FK and redraw the arm
         arm.FK()
         plt.remove("ARM")
         new_arm = arm.draw()
         new_arm.name = "ARM"
         plt += new_arm
 
-        # 4) Remove any old Jacobian arrows and draw updated ones at the new end-effector
+        # 4) Remove old Jacobian arrows and draw new ones
         for i in range(arm.n):
             plt.remove(f"JointCol_{i}")
 
         J = arm.VelocityJacobian()
-        p_end = arm.Jw[-1, :]
+        p_end = arm.Jw[-1]
         scale = 0.3
         for i in range(arm.n):
             col = J[:, i]
             if np.linalg.norm(col) < 1e-8:
                 continue
             head = p_end + scale * col
-            arrow = vd.Arrow(p_end, head, c=joint_colors[i])
+            arrow = vd.Arrow(p_end, head, c=joint_colors[i % len(joint_colors)])
             arrow.name = f"JointCol_{i}"
             plt += arrow
 
         plt.render()
-
     else:
         print("No valid point picked — click on the plane or geometry.")
 
 
 
+def OnKeyPress(evt):
+    global MODE, mode_label
+    # fetch the pressed key symbol from the Vedo interactor
+    key = evt.keypress.lower()
+    if key == 'j':
+        MODE = 'JT'
+    elif key == 'n':
+        MODE = 'GN'
+    mode_label.text(f"Mode: {MODE}  (J=Jacobian, N=Newton)")
+    plt.render() 
 
 
-arm = SimpleArm(link_lengths=[1, 0.5, 0.5, 1]) 
+
+
+arm = SimpleArm(link_lengths=[1, 1, 1, 1]) 
 plt = vd.Plotter()
 arm_actor = arm.draw()
 arm_actor.name = "ARM"
@@ -274,11 +298,13 @@ for i in range(arm.n):
 sph = vd.Sphere(pos=IK_target, r=0.05, c='b').draggable(True)
 sph.name = "Sphere"
 plt += sph
-
+mode_label = vd.Text2D(f"Mode: {MODE}  (J=Jacobian, N=Newton)",pos='top-left', c='black', bg='white')
+plt += mode_label
 plt += vd.Plane(s=[2.1*arm.n,2.1*arm.n]) # a plane to catch mouse events
 sliderCurrentJoint = plt.add_slider(OnCurrentJoint, 0, arm.n-1, 0, title="Current joint", pos=3, delayed=True)
 sliderAngle =  plt.add_slider(OnSliderAngle,-np.pi,np.pi,0., title="Joint Angle", pos=4)
 plt.add_callback('LeftButtonPress', LeftButtonPress) # add Mouse callback
+plt.add_callback('KeyPress', OnKeyPress)
 plt.user_mode('2d').show(zoom="tightest")
 
 plt.close()
