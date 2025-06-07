@@ -55,69 +55,104 @@ gives the instantaneous linear velocity of the end effector when joint \(i\) rot
 > When I adjust any joint angle, the corresponding arrow updates immediately, confirming that the Jacobian implementation is correct.
 
 
-
-
 ### Task 2.2: Gradient Descent–Based IK (Jacobian Transpose)
 
-I implemented a Jacobian‐transpose IK solver inside `SimpleArm.IK(target)` and adapted the GUI so that a left‐click both spawns a blue target sphere and drives the arm toward that point via gradient descent. Below is a concise summary, followed by two example screenshots.
+I solved the IK problem by **minimizing** the squared distance \(\|p_{\rm end}(\theta) - \text{target}\|^2\) using a **Jacobian-transpose gradient-descent** approach. This method is computationally efficient (no matrix inversion), simple to implement, and well-suited for real-time interaction in a 2D planar GUI.
+
+#### Why This Method?
+- **Efficiency:** Only requires a matrix–vector product (no costly pseudo-inverse).  
+- **Stability:** Works robustly for non-singular configurations.  
+- **Interactivity:** Fast enough to recompute on each mouse click for immediate visual feedback.
+
+#### Difficulties Faced
+- **Singular Starting Poses:** When the arm is fully stretched, the Jacobian loses radial rank and cannot move outward.  
+- **Unreachable Targets:** Without clipping, the solver would iterate endlessly chasing impossible positions.  
+- **Oscillation vs. Convergence Speed:** A fixed step size either overshoots near the target or is too slow when far away.  
+- **Flat-Gradient Regions:** Near singularities, Δθ can become vanishingly small while error remains, stalling progress.
 
 #### IK Solver Highlights
 
 1. **Parameters**  
-   - `max_iters = 1000`, `tol = 1e-3`, `alpha = 0.1` (step size).  
-   - Joint angles are wrapped into [−π, π] every iteration to prevent numerical drift.
+   - `max_iters = 1000`, `tol = 1e-3`, `alpha = 0.1` (initial step size)  
+   - Joint angles wrapped into [−π, π] each iteration to prevent numerical drift.
 
-2. **Iteration Loop**  
-   1. Compute current end-effector position:  
-      ```python
-      p_end = self.FK()
-      ```  
-   2. Compute position error:  
-      ```python
-      error = target - p_end
-      if np.linalg.norm(error) < tol:
-          break
-      ```  
-   3. Form the Jacobian:  
-      ```python
-      J = self.VelocityJacobian()
-      ```  
-   4. Perform a Jacobian-transpose update:  
-      ```python
-      delta = alpha * (J.T @ error)
-      self.angles += delta
-      ```  
-   5. Wrap each angle to [−π, π]:  
-      ```python
-      for i in range(self.n):
-          a = self.angles[i]
-          self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
-      ```  
+2. **Robustness Features**  
+   - **Target Clipping**  
+     ```python
+     max_reach = sum(self.link_lengths)
+     dist      = np.linalg.norm(target[:2])
+     if dist > max_reach:
+         target[:2] *= (max_reach - 1e-3) / dist
+     ```  
+     Projects unreachable clicks onto the reach circle, ensuring a solvable goal.  
+   - **Singularity Break-out**  
+     ```python
+     if all(abs(abs(a) - np.pi) < 1e-6 or abs(a) < 1e-6 for a in self.angles):
+         self.angles[0] += 1e-3
+     ```  
+     Adds a tiny nudge when fully stretched so the Jacobian regains full rank.  
+   - **Adaptive Step Size**  
+     ```python
+     prev_err = np.inf
+     for it in range(max_iters):
+         err = np.linalg.norm(error)
+         if err > prev_err:
+             alpha *= 0.5
+         prev_err = err
+         # compute Δθ…
+     ```  
+     Halves α on error increase to prevent oscillations and speed far-field motion.  
+   - **Early Exit on Tiny Updates**  
+     ```python
+     if np.linalg.norm(delta_theta) < 1e-4:
+         break
+     ```  
+     Stops when further angle updates are negligible.
 
-   This loop repeats until the tip is within `tol` (≈1 mm) of the target or until `max_iters` is reached.
+3. **Iteration Loop**  
+   ```python
+   for it in range(max_iters):
+       p_end = self.FK()
+       error = target[:2] - p_end[:2]
+       if np.linalg.norm(error) < tol:
+           break
 
-3. **Why This Approach?**  
-   - **Jacobian Transpose**: avoids computing a matrix inverse, works well near singularities, and is simple to implement.  
-   - **Early Stopping**: breaks out of the loop as soon as the tip error is small, saving computation.  
-   - **Angle Wrapping**: ensures angles remain bounded in [−π, π], preventing cumulative wrap-around drift.
+       J2D   = self.VelocityJacobian()[:2,:]
+       delta = alpha * (J2D.T @ error)
+       if np.linalg.norm(delta) < 1e-4:
+           break
 
-#### GUI Adaptation
+       self.angles += delta
+       self.angles = [np.arctan2(np.sin(a), np.cos(a)) for a in self.angles]
 
-- **Left-Click** on the plane:  
-  1. Draw or move a blue sphere at `IK_target`.  
-  2. Call `arm.IK(IK_target)`, which updates all joint angles so that `FK()` moves the end-effector toward the sphere.  
-  3. Recompute FK, redraw the arm in its new configuration, and refresh the Jacobian arrows at the new end-effector.  
-- **Unreachable Targets**: if the clicked point lies beyond the maximum reach (sum of link lengths), the arm simply stretches as far as possible in that direction. The solver cannot converge exactly, but it still minimizes the error.
+4. **Logging**  
+   Prints `IK converged in {it} iterations, error={err:.4f}` or `IK did not converge, final error={err:.4f}` for debugging.
 
-#### Example 1 (Reachable Target)
+#### Demonstration
 
-![IK Reachable Example](images/ik_reachable_example.png)
-
-
-#### Example 2 (Near-Vertical Reach)
-
-![IK Vertical Example](images/ik_vertical_example.png)
+_Clicked on a reachable target; the arm bends smoothly to meet the blue sphere:_  
+![Task2.2 IK Result](images/task2_2_result.png)
 
 
+### Task 2.3: Behavior with Unreachable Targets
+
+**Explanation:**  
+The Jacobian-transpose IK solver adjusts joint angles to minimize the distance between the end effector and the clicked target.  
+- **If the target is within reach**, the solver iterates until the tip converges onto the target (error < tolerance).  
+- **If the target is beyond reach**, the solver straightens the arm fully toward the target and then stops at maximum extension, since a straight-line pose is singular and the Jacobian cannot push further outward.
+
+**Examples:**
+
+![task2_3_result_1](images/task2_3_result_1.png)  
+*Figure 1:* The blue target is well beyond the arm’s fully stretched radius. Immediately after clicking, the solver drives the arm into a straight line pointing at the sphere.
+
+![task2_3_result_2](images/task2_3_result_2.png)  
+*Figure 2:* All links have aligned radially, reaching the maximum extension possible.
+
+![task2_3_result_3](images/task2_3_result_3.png)  
+*Figure 3:* A close-up of the Jacobian arrows at the tip—all are perpendicular to the extension direction, showing no component to push further outward.
+
+![task2_3_result_4](images/task2_3_result_4.png)  
+*Figure 4:* From another angle, the arm remains fully stretched and cannot close the remaining gap to the target.
 
 

@@ -64,42 +64,71 @@ class SimpleArm:
 
         return self.Jw[-1,:] # return the position of the end effector
         
+    
     def IK(self, target):
         # calculate the inverse kinematics of the arm
         # target is the position of the end effector in world coordinates
         # return a list of joint angles
-        
-        # 1) Set solver parameters
+        # 1) Solver params
         max_iters = 1000
-        tol = 1e-3
-        alpha = 0.1
+        tol       = 1e-3
+        alpha     = 0.1
 
-        # 2) Ensure target is a NumPy array
+        # 2) Convert to array
         target = np.array(target)
 
-        for _ in range(max_iters):
-            # 3) Compute current end-effector position (also updates self.Jw)
+        # ────────────────────────────────────────────────────────────────
+        # [A] Clip unreachable targets onto the max‐reach circle
+        max_reach = sum(self.link_lengths)
+        d = np.linalg.norm(target[:2])
+        if d > max_reach:
+            target[:2] *= (max_reach - 1e-3) / d
+        # ────────────────────────────────────────────────────────────────
+
+        # ────────────────────────────────────────────────────────────────
+        # [B] Break singular straight‐line start by a tiny perturbation
+        #     (so Jacobian is full rank)
+        if all(abs(abs(a) - np.pi) < 1e-6 or abs(a) < 1e-6 for a in self.angles):
+            self.angles[0] += 1e-3
+        # ────────────────────────────────────────────────────────────────
+
+        prev_err = np.inf
+        for it in range(max_iters):
+            # 3) FK → self.Jw, p_end
             p_end = self.FK()
 
-            # 4) Compute position error
-            error = target - p_end
-            if np.linalg.norm(error) < tol:
+            # 4) 2D position error
+            error = target[:2] - p_end[:2]
+            err_norm = np.linalg.norm(error)
+            if err_norm < tol:
+                print(f"IK converged in {it} iterations (error {err_norm:.4f})")
                 break
 
-            # 5) Compute current Jacobian (3×n)
-            J = self.VelocityJacobian()
+            # 5) Adaptive α: if error grew, damp step size
+            if err_norm > prev_err:
+                alpha *= 0.5
+            prev_err = err_norm
 
-            # 6) Jacobian-transpose update: Δθ = α * J^T * error
-            delta_theta = alpha * (J.T @ error)
+            # 6) Build 2×n Jacobian
+            J2D = self.VelocityJacobian()[:2, :]
 
-            # 7) Apply the update to each joint angle
+            # 7) JT update
+            delta_theta = alpha * (J2D.T @ error)
+
+            # ───────────────────────────────────────────────────────
+            # [C] Early exit on vanishing Δθ (singularity/stuck)
+            if np.linalg.norm(delta_theta) < 1e-4:
+                print(f"Δθ too small at iter {it}, exiting (error {err_norm:.4f})")
+                break
+            # ───────────────────────────────────────────────────────
+
+            # 8) Apply and wrap angles
             for i in range(self.n):
                 self.angles[i] += delta_theta[i]
-
-            # 8) Wrap each angle into [-π, π] for stability
-            for i in range(self.n):
-                a = self.angles[i]
-                self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+                self.angles[i] = np.arctan2(np.sin(self.angles[i]),
+                                            np.cos(self.angles[i]))
+        else:
+            print(f"IK did not converge (final error {err_norm:.4f})")
 
         return self.angles
 
