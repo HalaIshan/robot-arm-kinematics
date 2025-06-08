@@ -182,13 +182,15 @@ Warnings (e.g. “⚠️ click to set GN target”) also appear in the same pane
 
 We picked the blue sphere as our target and captured screenshots at GN steps 0, 3, 15, 20, 30, and upon convergence (69 steps). Compare this with the Jacobian-transpose run, which typically required 100+ steps to reach the same error tolerance.
 
-| GN Step 0 | GN Step 3 | GN Step 15 |
-|:---------:|:---------:|:----------:|
-| ![GN0](images/step0.png) | ![GN3](images/step3.png) | ![GN15](images/step15.png) |
-
-| GN Step 20 | GN Step 30 | GN Converged (69) |
-|:----------:|:----------:|:-----------------:|
-| ![GN20](images/step20.png) | ![GN30](images/step30.png) | ![GN69](images/converged.png) |
+| GN Step 0 | GN Step 3 | 
+|:---------:|:---------:|
+| ![GN0](images/step0.png) | ![GN3](images/step3.png) |
+| GN Step 15 | GN Step 20 | 
+|:---------:|:---------:|
+| ![GN0](images/step15.png) | ![GN3](images/step20.png) | 
+| GN Step 30 | GN Converged (69) |
+|:----------:|:-----------------:|
+| ![GN30](images/step30.png) | ![GN69](images/step69.png) |
 
 **Observation:**  
 - **Gauss–Newton** made large, direct corrections via `Δθ = J⁺·error`, quickly reducing the end-effector error (most progress in < 30 steps).  
