@@ -156,3 +156,42 @@ The Jacobian-transpose IK solver adjusts joint angles to minimize the distance b
 *Figure 4:* From another angle, the arm remains fully stretched and cannot close the remaining gap to the target.
 
 
+# Gauss–Newton vs. Jacobian-Transpose IK: Implementation, GUI & Convergence
+
+## 1. Implementation & GUI Adaptations  
+- **New solver**: Added `IK_GN()` alongside the existing `IK_JT()` in `SimpleArm`.  
+- **Mode switching**: Press **J** for JT (Jacobian-transpose), **N** for GN (Gauss–Newton), **S** to step one iteration when in GN mode.  
+- **Manual-step mode**:  
+  1. Click anywhere to set a new target pose.  
+  2. The arm instantly moves to the first GN/JT solution (or initializes GN stepping).  
+  3. In GN mode, each press of **S** advances exactly one pseudoinverse step—this lets you capture screenshots at iterations 0, 3, 15, 20, 30, … until convergence.  
+- **Clean drawing**: Factorized “remove old arrows” + “draw new arrows” into two helper functions:
+  ```python
+  remove_jacobian_arrows(plt, arm.n)
+  draw_jacobian_arrows(arm, plt)  # only in JT mode
+**Status label**  
+Shows current mode and, in GN mode, “Step: k”.  
+Warnings (e.g. “⚠️ click to set GN target”) also appear in the same pane below the mode text.
+
+### Development Challenges & Solutions
+- I initially struggled with duplicating the “remove & redraw” code for Jacobian arrows in multiple callbacks; extracting them into `remove_jacobian_arrows(plt, n)` and `draw_jacobian_arrows(arm, plt)` made each event handler concise and eliminated copy-paste errors.  
+- Handling GN’s manual-step mode required storing the target inside `SimpleArm` (`self.target`) so that `step_IK()` could access it without re-passing arguments.  
+- Tuning the label updates across click, key, and step events was tricky—factoring out `reset_label()` kept the UI text consistent and reduced subtle bugs.
+
+## Convergence Example: Gauss–Newton vs. Jacobian-Transpose
+
+We picked the blue sphere as our target and captured screenshots at GN steps 0, 3, 15, 20, 30, and upon convergence (69 steps). Compare this with the Jacobian-transpose run, which typically required 100+ steps to reach the same error tolerance.
+
+| GN Step 0 | GN Step 3 | GN Step 15 |
+|:---------:|:---------:|:----------:|
+| ![GN0](step0.png) | ![GN3](step3.png) | ![GN15](step15.png) |
+
+| GN Step 20 | GN Step 30 | GN Converged (69) |
+|:----------:|:----------:|:-----------------:|
+| ![GN20](step20.png) | ![GN30](step30.png) | ![GN69](converged.png) |
+
+**Observation:**  
+- **Gauss–Newton** made large, direct corrections via `Δθ = J⁺·error`, quickly reducing the end-effector error (most progress in < 30 steps).  
+- **Jacobian-Transpose** (gradient descent) followed the error gradient, took many small adjustments, and typically needed > 100 steps.  
+
+The GN path is smoother and more “straight-line” in joint-space, whereas JT often oscillates and slows near the minimum.

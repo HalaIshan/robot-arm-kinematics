@@ -8,8 +8,29 @@ import numpy as np
 # Define joint_colors BEFORE the class/methods that rely on it.
 joint_colors = ["gray", "red", "green", "blue", "orange"]
 MODE = 'JT'  # 'JT' = Jacobian-Transpose, 'GN' = Gauss–Newton
+def remove_jacobian_arrows(plt, n):
+    for i in range(n):
+        plt.remove(f"JointCol_{i}")
 
+def draw_jacobian_arrows(arm, plt, scale=0.3):
+    J     = arm.VelocityJacobian()
+    p_end = arm.Jw[-1]
+    for i in range(arm.n):
+        col = J[:, i]
+        if np.linalg.norm(col) < 1e-8:
+            continue
+        arrow = vd.Arrow(p_end, p_end + scale*col,
+                         c=joint_colors[i % len(joint_colors)])
+        arrow.name = f"JointCol_{i}"
+        plt += arrow
 
+def reset_label():
+    if MODE == 'GN':
+        txt = (f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\n"
+                   f"Step: {arm.iter_count}")
+    else:
+        txt = f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)"
+    mode_label.text(txt)
 
 def Rot(angle, axis):
     # calculate the rotation matrix for a given angle and axis using Rodrigues' formula
@@ -34,37 +55,29 @@ class SimpleArm:
         # The arm is initialized to lie along the x-axis
         
         if link_lengths is None:
-            link_lengths = [1, 1, 1]  # Default 3 links of length 1
+            link_lengths = [1, 1, 1] 
         self.link_lengths = link_lengths
         self.n = len(link_lengths)
-        self.angles = [0]*self.n # joint angles, starting from the base joint to the end effector
-        
-        # self.Jl is a matrix that contains joints position in local coordinates.
-        # Each row contains the coordinates of a joint
-        # Number of joints is n+1, including the base and end effector
-        self.Jl = np.zeros((self.n+1, 3)) 
-        for i in range(1,self.n + 1): # we start from 1 because the base joint is at the origin (0,0,0) and finish the end effector is at the end of the last link
-            self.Jl[i,:] = np.array([self.link_lengths[i - 1], 0, 0]) # initialize joint positions to lie along the x-axis
+        self.angles = [0]*self.n 
 
-        self.Jw = np.zeros((self.n+1, 3)) # joint positions in world coordinates
+        self.Jl = np.zeros((self.n+1, 3)) 
+        for i in range(1,self.n + 1):
+            self.Jl[i,:] = np.array([self.link_lengths[i - 1], 0, 0]) 
+        self.Jw = np.zeros((self.n+1, 3)) 
         self.FK()
 
     def FK(self, angles=None): 
-        # calculate the forward kinematics of the arm
-
-        # angles is a list of joint angles. If angles is None, the current joint angles are used
         if angles is not None:
             self.angles = angles
         
-        # Initial rotation matrix
         Ri = np.eye(3)
-        self.Jw[0, :] = np.array([0, 0, 0])  # Base position is always at the origin
+        self.Jw[0, :] = np.array([0, 0, 0]) 
 
         for i in range(1, self.n + 1):
             Ri = Rot(self.angles[i - 1], [0, 0, 1]) @ Ri
             self.Jw[i, :] = Ri @ self.Jl[i, :] + self.Jw[i - 1, :]
 
-        return self.Jw[-1,:] # return the position of the end effector
+        return self.Jw[-1,:] 
         
 
 
@@ -141,6 +154,45 @@ class SimpleArm:
             if np.linalg.norm(delta) < 1e-4: break
             self.angles = [np.arctan2(np.sin(a+da), np.cos(a+da))
                            for a, da in zip(self.angles, delta)]
+            
+
+    def init_IK(self, target, mode):
+        """Prepare a manual‐step run."""
+        import numpy as np
+        self.target     = self.preprocess_target(np.array(target))
+        self.mode       = mode         # 'JT' or 'GN'
+        self.iter_count = 0
+        self.prev_err   = np.inf
+        self.alpha      = 0.1
+
+    def step_IK(self):
+        """Perform exactly one JT/GN iteration. Returns True when done."""
+        tol = 1e-3
+        p_end    = self.FK()
+        error    = self.target[:2] - p_end[:2]
+        err_norm = np.linalg.norm(error)
+        if err_norm < tol:
+            print(f"{self.mode} converged in {self.iter_count} steps")
+            return True
+
+        J2D = self.VelocityJacobian()[:2, :]
+        if self.mode == 'JT':
+            delta = self.alpha * (J2D.T @ error)
+        else:  # 'GN'
+            delta = self.alpha * (np.linalg.pinv(J2D) @ error)
+
+        if np.linalg.norm(delta) < 1e-4:
+            print(f"{self.mode} Δθ too small at step {self.iter_count}")
+            return True
+
+        self.angles = [
+            np.arctan2(np.sin(a+da), np.cos(a+da))
+            for a, da in zip(self.angles, delta)
+        ]
+        self.prev_err   = err_norm
+        self.iter_count += 1
+        return False
+
     
     def VelocityJacobian(self, angles=None):
         # calculate the velocity jacobian of the arm
@@ -217,56 +269,78 @@ def LeftButtonPress(evt):
     if picked is not None:
         IK_target = np.array(picked)
 
-        # 1) Draw or move the blue target sphere
         plt.remove("Sphere")
         sph = vd.Sphere(pos=IK_target, r=0.05, c='b')
         sph.name = "Sphere"
         plt += sph
 
-        # 2) Run the selected IK solver
         if MODE == 'JT':
             arm.IK_JT(IK_target)
-        else:
-            arm.IK_GN(IK_target)
+        elif MODE == 'GN':
+            arm.init_IK(IK_target, 'GN')
 
-        # 3) Recompute FK and redraw the arm
         arm.FK()
         plt.remove("ARM")
         new_arm = arm.draw()
         new_arm.name = "ARM"
         plt += new_arm
 
-        # 4) Remove old Jacobian arrows and draw new ones
-        for i in range(arm.n):
-            plt.remove(f"JointCol_{i}")
+        remove_jacobian_arrows(plt, arm.n)
 
-        J = arm.VelocityJacobian()
-        p_end = arm.Jw[-1]
-        scale = 0.3
-        for i in range(arm.n):
-            col = J[:, i]
-            if np.linalg.norm(col) < 1e-8:
-                continue
-            head = p_end + scale * col
-            arrow = vd.Arrow(p_end, head, c=joint_colors[i % len(joint_colors)])
-            arrow.name = f"JointCol_{i}"
-            plt += arrow
+        if MODE == 'JT':
+            draw_jacobian_arrows(arm, plt)
 
+        reset_label()
         plt.render()
+
     else:
-        print("No valid point picked — click on the plane or geometry.")
+        mode_label.text(mode_label.text() +"\n⚠️ No valid point picked — click on the plane or geometry.")
 
 
 
 def OnKeyPress(evt):
-    global MODE, mode_label
-    # fetch the pressed key symbol from the Vedo interactor
+    global MODE, mode_label, arm, plt
+    x=0
     key = evt.keypress.lower()
     if key == 'j':
         MODE = 'JT'
+        arm.iter_count = 0
+        arm.prev_err   = np.inf
+        reset_label()
     elif key == 'n':
         MODE = 'GN'
-    mode_label.text(f"Mode: {MODE}  (J=Jacobian, N=Newton)")
+        arm.iter_count = 0
+        arm.prev_err   = np.inf
+        reset_label()
+    elif key == 's':
+        if not hasattr(arm, 'target'):
+            # No GN target yet — warn user in the label
+            mode_label.text(
+                f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\n"
+                "⚠️ Click to set a GN target first."
+            )
+            return
+        if MODE == 'GN':
+            done = arm.step_IK()
+            if done:
+                mode_label.text(
+                    f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\n"
+                    f"✅ GN converged in {arm.iter_count} steps")
+                return  
+            arm.FK()
+            plt.remove("ARM")
+            new_arm = arm.draw()
+            new_arm.name = "ARM"
+            plt += new_arm
+            remove_jacobian_arrows(plt, arm.n)
+            reset_label()
+            plt.render()
+        else:
+            mode_label.text(
+                f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\n"
+                "Press 'n' to switch to GN before stepping.")
+    else:
+        reset_label()    
     plt.render() 
 
 
@@ -278,27 +352,15 @@ arm_actor = arm.draw()
 arm_actor.name = "ARM"
 plt += arm_actor
 
-# ─── 2) Draw initial arrows, all anchored at p_end ────────────────────────────
-J_init = arm.VelocityJacobian()
-p_end = arm.Jw[-1, :]
-scale = 0.3
+if MODE == 'JT':
+    remove_jacobian_arrows(plt, arm.n)
+    draw_jacobian_arrows(arm, plt)
 
-for i in range(arm.n):
-    col = J_init[:, i]
-    if np.linalg.norm(col) < 1e-8:
-        continue
-
-    head = p_end + scale * col
-    color = joint_colors[i]
-    arrow = vd.Arrow(p_end, head, c=color)
-    arrow.name = f"JointCol_{i}"
-    plt += arrow
-# ───────────────────────────────────────────────────────────────────────────────
 
 sph = vd.Sphere(pos=IK_target, r=0.05, c='b').draggable(True)
 sph.name = "Sphere"
 plt += sph
-mode_label = vd.Text2D(f"Mode: {MODE}  (J=Jacobian, N=Newton)",pos='top-left', c='black', bg='white')
+mode_label = vd.Text2D(f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)", pos='top-left', c='black', bg='white')
 plt += mode_label
 plt += vd.Plane(s=[2.1*arm.n,2.1*arm.n]) # a plane to catch mouse events
 sliderCurrentJoint = plt.add_slider(OnCurrentJoint, 0, arm.n-1, 0, title="Current joint", pos=3, delayed=True)
