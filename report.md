@@ -184,11 +184,11 @@ We picked the blue sphere as our target and captured screenshots at GN steps 0, 
 
 | GN Step 0 | GN Step 3 | GN Step 15 |
 |:---------:|:---------:|:----------:|
-| ![GN0](step0.png) | ![GN3](step3.png) | ![GN15](step15.png) |
+| ![GN0](images/step0.png) | ![GN3](images/step3.png) | ![GN15](images/step15.png) |
 
 | GN Step 20 | GN Step 30 | GN Converged (69) |
 |:----------:|:----------:|:-----------------:|
-| ![GN20](step20.png) | ![GN30](step30.png) | ![GN69](converged.png) |
+| ![GN20](images/step20.png) | ![GN30](images/step30.png) | ![GN69](images/converged.png) |
 
 **Observation:**  
 - **Gauss–Newton** made large, direct corrections via `Δθ = J⁺·error`, quickly reducing the end-effector error (most progress in < 30 steps).  
