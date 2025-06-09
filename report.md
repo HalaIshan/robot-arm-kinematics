@@ -197,3 +197,90 @@ We picked the blue sphere as our target and captured screenshots at GN steps 0, 
 - **Jacobian-Transpose** (gradient descent) followed the error gradient, took many small adjustments, and typically needed > 100 steps.  
 
 The GN path is smoother and more “straight-line” in joint-space, whereas JT often oscillates and slows near the minimum.
+
+
+## Task 3.2: Unique IK Solution for Redundant Arms
+When a planar arm has **more than two joints**, it is *kinematically redundant*—there are infinitely many joint‐angle vectors $\theta$ that place the tip at a given 2-D position.  To pick out a **single** “best” $\Delta\theta$ update at each step, we added a small Tikhonov (damped least–squares) term to our Gauss–Newton and Jacobian-transpose solvers.
+
+### 3.2.1  Mathematical Formulation
+
+Instead of solving
+
+$$
+\min_{\Delta\theta}\;\|J\,\Delta\theta - e\|^2,
+$$
+
+we solve the **regularized** problem
+
+$$
+\min_{\Delta\theta}\;\|J\,\Delta\theta - e\|^2 \;+\;\lambda^2\,\|\Delta\theta\|^2.
+$$
+
+Here:
+
+* $J\in\mathbb{R}^{2\times n}$ is the planar Jacobian,
+* $e = p_{\rm target}-p_{\rm end}$ is the 2-D position error,
+* $\lambda>0$ is the **damping** (regularization) parameter.
+
+The closed-form update becomes
+
+$$
+\Delta\theta \;=\;\alpha\,J^T\bigl(JJ^T + \lambda^2I_2\bigr)^{-1}e,
+$$
+
+where $\alpha$ is the usual step‐size.
+
+
+###  Implementation Details
+
+#### **Parameters (in `__init__`)**  
+- `self.alpha` (`α`): step-size for both JT & GN.  
+  - **Small** α → very stable but slow convergence  
+  - **Large** α → fast motion but risk of overshoot/oscillation  
+- `self.lam` (`λ`): Tikhonov damping factor.  
+  - **Small** λ → nearly exact error correction (ill-conditioned near singularities)  
+  - **Large** λ → suppresses null-space “wriggle,” smoother motion, more singularity robustness  
+
+```python
+self.alpha = 0.1    # α: joint-update step size
+self.lam   = 0.1    # λ: damping (Tikhonov) factor
+````
+
+#### **Damped-LS update** (in both `IK_GN()` and, when `n>2`, `IK_JT()`):
+
+Applies minimum-norm regularization to pick a unique Δθ and prevent large null-space motions / numerical blow-up.
+
+```python
+J2D = self.VelocityJacobian()[:2, :]   # 2×n planar Jacobian
+if self.n > 2:
+    JJt   = J2D @ J2D.T                            # 2×2
+    A     = JJt + (self.lam**2) * np.eye(2)         # damped normal eq.
+    invA  = np.linalg.inv(A)
+    delta = self.alpha * (J2D.T @ (invA @ error))
+else:
+    # fallback to plain pseudoinverse when only 2 joints
+    delta = self.alpha * (np.linalg.pinv(J2D) @ error)
+```
+
+#### **Angle application & wrapping**
+
+Ensures each joint stays within \[−π, π] to avoid unbounded drift.
+
+```python
+for i in range(self.n):
+    a = self.angles[i] + delta[i]
+    self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+```
+
+
+### 3.2.3  Why This Yields a Unique Solution
+
+* **Null‐space suppression.**  The $\lambda^2\|\Delta\theta\|^2$ term penalizes large joint motions in directions that do not move the tip, collapsing the infinite family of solutions to the *minimum-norm* one.
+* **Singularity robustness.**  Near kinematic singularities ($\det JJ^T\approx0$), adding $\lambda^2I$ prevents numerical blow-up.
+
+### 3.2.4  Demonstration
+
+With our 4-joint arm, clicking any reachable point now produces a smooth, unique bend pattern—no arbitrary “wriggle” in the extra DOFs.
+
+[▶ Redundant-Arm DLS IK Demo](videoes/task3_2_dls_demo.mkv)
+

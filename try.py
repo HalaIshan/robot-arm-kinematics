@@ -5,32 +5,9 @@ import numpy as np
 
 #%% class for a robot arm
 
-# Define joint_colors BEFORE the class/methods that rely on it.
 joint_colors = ["gray", "red", "green", "blue", "orange"]
 MODE = 'JT'  # 'JT' = Jacobian-Transpose, 'GN' = Gauss–Newton
-def remove_jacobian_arrows(plt, n):
-    for i in range(n):
-        plt.remove(f"JointCol_{i}")
 
-def draw_jacobian_arrows(arm, plt, scale=0.3):
-    J     = arm.VelocityJacobian()
-    p_end = arm.Jw[-1]
-    for i in range(arm.n):
-        col = J[:, i]
-        if np.linalg.norm(col) < 1e-8:
-            continue
-        arrow = vd.Arrow(p_end, p_end + scale*col,
-                         c=joint_colors[i % len(joint_colors)])
-        arrow.name = f"JointCol_{i}"
-        plt += arrow
-
-def reset_label():
-    if MODE == 'GN':
-        txt = (f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\n"
-                   f"Step: {arm.iter_count}")
-    else:
-        txt = f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)"
-    mode_label.text(txt)
 
 def Rot(angle, axis):
     # calculate the rotation matrix for a given angle and axis using Rodrigues' formula
@@ -54,6 +31,11 @@ class SimpleArm:
         # The axis of rotation for each joint are assumed to be the z-axis
         # The arm is initialized to lie along the x-axis
         
+        # ————— NEW LINES —————
+        self.alpha = 0.1     # step‐size for all IK methods
+        self.lam   = 0.1    # damping factor for DLS
+        # ————————————————
+
         if link_lengths is None:
             link_lengths = [1, 1, 1] 
         self.link_lengths = link_lengths
@@ -125,35 +107,68 @@ class SimpleArm:
                 alpha *= 0.5
             prev_err = err_norm
             J2D = self.VelocityJacobian()[:2, :]
-            delta_theta = alpha * (J2D.T @ error)
+            if self.n > 2:                  # only apply DLS when redundant
+                JJt   = J2D @ J2D.T
+                A     = JJt + (self.lam**2)*np.eye(2)
+                invA  = np.linalg.inv(A)
+                delta = self.alpha * (J2D.T @ (invA @ error))
+            else:
+                delta = self.alpha * (J2D.T @ error)
 
-            if np.linalg.norm(delta_theta) < 1e-4:
+
+            if np.linalg.norm(delta) < 1e-4:
                 print(f"Δθ too small at iter {it}, exiting (error {err_norm:.4f})")
                 break
         
             for i in range(self.n):
-                self.angles[i] += delta_theta[i]
-                self.angles[i] = np.arctan2(np.sin(self.angles[i]),
-                                            np.cos(self.angles[i]))
+                self.angles[i] = np.arctan2(np.sin(self.angles[i] + delta[i]), np.cos(self.angles[i] + delta[i]))
         else:
             print(f"IK did not converge (final error {err_norm:.4f})")
 
+        self.angles = [np.arctan2(np.sin(a + d), np.cos(a + d))
+                for a, d in zip(self.angles, delta)]
         return self.angles
 
     
     def IK_GN(self, target):
-        print(">>> Running Gauss-Newton IK <<<")
+        print(">>> Running Gauss-Newton / DLS IK <<<")
         target = self.preprocess_target(target.copy())
-        max_iters, tol, alpha = 1000, 1e-3, 0.1
+        max_iters, tol = 1000, 1e-3
+
         for it in range(max_iters):
-            p_end = self.FK()
-            error = target[:2] - p_end[:2]
-            if np.linalg.norm(error) < tol: break
-            J2D = self.VelocityJacobian()[:2,:]
-            delta = alpha * (np.linalg.pinv(J2D) @ error)
-            if np.linalg.norm(delta) < 1e-4: break
-            self.angles = [np.arctan2(np.sin(a+da), np.cos(a+da))
-                           for a, da in zip(self.angles, delta)]
+            p_end   = self.FK()
+            error   = target[:2] - p_end[:2]
+            err_norm = np.linalg.norm(error)
+            if err_norm < tol:
+                print(f"DLS-GN converged in {it} iters (err {err_norm:.4f})")
+                break
+
+            J2D = self.VelocityJacobian()[:2, :]      # 2×n
+
+            if self.n > 2:
+                # ——— Damped least-squares update ———
+                JJt      = J2D @ J2D.T                # 2×2
+                A        = JJt + (self.lam**2)*np.eye(2)
+                invA     = np.linalg.inv(A)
+                delta    = self.alpha * (J2D.T @ (invA @ error))
+            else:
+                # fallback to plain pseudo-inverse when not redundant
+                delta    = self.alpha * (np.linalg.pinv(J2D) @ error)
+
+            if np.linalg.norm(delta) < 1e-4:
+                print(f"Δθ too small at iter {it}")
+                break
+
+            # apply Δθ and wrap into [−π,π]
+            for i in range(self.n):
+                a = self.angles[i] + delta[i]
+                self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+        else:
+            print(f"DLS-GN did not converge (final err {err_norm:.4f})")
+
+        return self.angles
+
+
             
 
     def init_IK(self, target, mode):
@@ -226,6 +241,38 @@ class SimpleArm:
 #%%
 activeJoint = 0
 IK_target = [1,1,0]
+
+def remove_jacobian_arrows(plt, n):
+    for i in range(n):
+        plt.remove(f"JointCol_{i}")
+
+def draw_jacobian_arrows(arm, plt, scale=0.3):
+    J     = arm.VelocityJacobian()
+    p_end = arm.Jw[-1]
+    for i in range(arm.n):
+        col = J[:, i]
+        if np.linalg.norm(col) < 1e-8:
+            continue
+        arrow = vd.Arrow(p_end, p_end + scale*col,
+                         c=joint_colors[i % len(joint_colors)])
+        arrow.name = f"JointCol_{i}"
+        plt += arrow
+
+def reset_label():
+    if MODE == 'GN':
+        base = f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\nStep: {arm.iter_count}"
+    else:
+        base = f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)"
+    
+    if arm.n > 2:
+        extra = "\nUnique: Damped least-squares"
+    else:
+        extra = "\nUnique: none"
+    
+    mode_label.text(base + extra)
+
+
+
 def OnSliderAngle(widget, event):
     global activeJoint, arm, plt
     arm.angles[activeJoint] = widget.value
@@ -236,24 +283,9 @@ def OnSliderAngle(widget, event):
     arm_actor.name = "ARM"
     plt += arm_actor
 
-    for i in range(arm.n):
-        plt.remove(f"JointCol_{i}")
-
-    J = arm.VelocityJacobian()
-    p_end = arm.Jw[-1, :]
-    scale = 0.3
-
-    for i in range(arm.n):
-        col = J[:, i]
-        if np.linalg.norm(col) < 1e-8:
-            continue
-
-        head = p_end + scale * col
-        color = joint_colors[i]
-        arrow = vd.Arrow(p_end, head, c=color)
-        arrow.name = f"JointCol_{i}"
-        plt += arrow
-
+    remove_jacobian_arrows(plt, arm.n)
+    if MODE == 'JT':
+        draw_jacobian_arrows(arm, plt)
     plt.render()
 
 
