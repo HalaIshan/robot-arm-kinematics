@@ -106,8 +106,11 @@ class SimpleArm:
             if err_norm > prev_err:
                 alpha *= 0.5
             prev_err = err_norm
-            J2D = self.VelocityJacobian()[:2, :]
-            if self.n > 2:                  # only apply DLS when redundant
+            J2D = self.VelocityJacobian()[:2, :]             
+            # —————————————————————————————————————————————————————————
+            #  modified IK_JT snippet — freeze first `activeJoint` DOFs
+            free_joints = self.n - activeJoint
+            if free_joints > 2:
                 JJt   = J2D @ J2D.T
                 A     = JJt + (self.lam**2)*np.eye(2)
                 invA  = np.linalg.inv(A)
@@ -115,13 +118,15 @@ class SimpleArm:
             else:
                 delta = self.alpha * (J2D.T @ error)
 
+            # ❄️ freeze the first `activeJoint` joints:
+            delta[:activeJoint] = 0
 
-            if np.linalg.norm(delta) < 1e-4:
-                print(f"Δθ too small at iter {it}, exiting (error {err_norm:.4f})")
-                break
-        
+            # apply & wrap angles for all joints
             for i in range(self.n):
-                self.angles[i] = np.arctan2(np.sin(self.angles[i] + delta[i]), np.cos(self.angles[i] + delta[i]))
+                a = self.angles[i] + delta[i]
+                self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+            # —————————————————————————————————————————————————————————
+
         else:
             print(f"IK did not converge (final error {err_norm:.4f})")
 
@@ -145,24 +150,26 @@ class SimpleArm:
 
             J2D = self.VelocityJacobian()[:2, :]      # 2×n
 
-            if self.n > 2:
-                # ——— Damped least-squares update ———
-                JJt      = J2D @ J2D.T                # 2×2
-                A        = JJt + (self.lam**2)*np.eye(2)
-                invA     = np.linalg.inv(A)
-                delta    = self.alpha * (J2D.T @ (invA @ error))
+            # —————————————————————————————————————————————————————————
+            #  modified IK_GN snippet — freeze first `activeJoint` DOFs
+            free_joints = self.n - activeJoint
+            if free_joints > 2:
+                JJt   = J2D @ J2D.T
+                A     = JJt + (self.lam**2)*np.eye(2)
+                invA  = np.linalg.inv(A)
+                delta = self.alpha * (J2D.T @ (invA @ error))
             else:
-                # fallback to plain pseudo-inverse when not redundant
-                delta    = self.alpha * (np.linalg.pinv(J2D) @ error)
+                delta = self.alpha * (np.linalg.pinv(J2D) @ error)
 
-            if np.linalg.norm(delta) < 1e-4:
-                print(f"Δθ too small at iter {it}")
-                break
+            # ❄️ freeze the first `activeJoint` joints:
+            delta[:activeJoint] = 0
 
-            # apply Δθ and wrap into [−π,π]
+            # apply & wrap angles for all joints
             for i in range(self.n):
                 a = self.angles[i] + delta[i]
                 self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+            # —————————————————————————————————————————————————————————
+
         else:
             print(f"DLS-GN did not converge (final err {err_norm:.4f})")
 
@@ -182,6 +189,7 @@ class SimpleArm:
 
     def step_IK(self):
         """Perform exactly one JT/GN iteration. Returns True when done."""
+        global activeJoint
         tol = 1e-3
         p_end    = self.FK()
         error    = self.target[:2] - p_end[:2]
@@ -199,11 +207,13 @@ class SimpleArm:
         if np.linalg.norm(delta) < 1e-4:
             print(f"{self.mode} Δθ too small at step {self.iter_count}")
             return True
+        
+        delta[:activeJoint] = 0
 
-        self.angles = [
-            np.arctan2(np.sin(a+da), np.cos(a+da))
-            for a, da in zip(self.angles, delta)
-        ]
+        # apply Δθ and wrap into [−π,π]
+        self.angles = [np.arctan2(np.sin(a+da), np.cos(a+da))
+        for a, da in zip(self.angles, delta)]
+
         self.prev_err   = err_norm
         self.iter_count += 1
         return False
@@ -258,18 +268,32 @@ def draw_jacobian_arrows(arm, plt, scale=0.3):
         arrow.name = f"JointCol_{i}"
         plt += arrow
 
+
+
+
 def reset_label():
+    # how many joints remain free (not frozen by the slider)
+    free_joints = arm.n - activeJoint
+    # decide if we’re in the redundant, unique‐solution regime
+    if free_joints > 2:
+        status = "using DLS (unique solution)"
+    else:
+        status = "no redundancy"
+
+    # base mode & status line
+    base = (f"Mode: {MODE} \n [{status}, {free_joints} free joint"
+            f"{'s' if free_joints != 1 else ''}]\n"
+            "(J=Jacobian, N=Newton, S=step)")
+
+    # append step count for GN
     if MODE == 'GN':
-        base = f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)\nStep: {arm.iter_count}"
+        txt = base + f"\nStep: {arm.iter_count}"
     else:
-        base = f"Mode: {MODE}  (J=Jacobian, N=Newton, S=step)"
-    
-    if arm.n > 2:
-        extra = "\nUnique: Damped least-squares"
-    else:
-        extra = "\nUnique: none"
-    
-    mode_label.text(base + extra)
+        txt = base
+
+    mode_label.text(txt)
+
+
 
 
 

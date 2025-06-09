@@ -202,7 +202,7 @@ The GN path is smoother and more “straight-line” in joint-space, whereas JT 
 ## Task 3.2: Unique IK Solution for Redundant Arms
 When a planar arm has **more than two joints**, it is *kinematically redundant*—there are infinitely many joint‐angle vectors $\theta$ that place the tip at a given 2-D position.  To pick out a **single** “best” $\Delta\theta$ update at each step, we added a small Tikhonov (damped least–squares) term to our Gauss–Newton and Jacobian-transpose solvers.
 
-### 3.2.1  Mathematical Formulation
+### Mathematical Formulation
 
 Instead of solving
 
@@ -273,14 +273,21 @@ for i in range(self.n):
 ```
 
 
-### 3.2.3  Why This Yields a Unique Solution
+### Why This Yields a Unique Solution
 
 * **Null‐space suppression.**  The $\lambda^2\|\Delta\theta\|^2$ term penalizes large joint motions in directions that do not move the tip, collapsing the infinite family of solutions to the *minimum-norm* one.
 * **Singularity robustness.**  Near kinematic singularities ($\det JJ^T\approx0$), adding $\lambda^2I$ prevents numerical blow-up.
 
-### 3.2.4  Demonstration
+### Demonstration
 
 With our 4-joint arm, clicking any reachable point now produces a smooth, unique bend pattern—no arbitrary “wriggle” in the extra DOFs.
 
 [▶ Redundant-Arm DLS IK Demo](videoes/task3_2_dls_demo.mkv)
 
+
+
+ **Note:** I initially omitted the “Current joint” freeze feature—so the first *k* joints (slider value) moved when they should have stayed fixed. This has now been corrected in `IK_JT()`, `IK_GN()`, and `step_IK()`. Below is a short video demonstrating the slider locking the specified joints during IK.
+
+[▶ example using Gradient Descent-based IK when solution is non redundant](videoes/freeze_demo1.mkv)
+
+[▶ example using Gauss-Newton-based IK  when solution is redundant ](videoes/freeze_demo2.mkv)
