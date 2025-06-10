@@ -8,6 +8,10 @@ import numpy as np
 joint_colors = ["gray", "red", "green", "blue", "orange"]
 MODE = 'JT'  # 'JT' = Jacobian-Transpose, 'GN' = Gauss–Newton
 
+def wrap_deg_180(degs):
+    # maps any angle to [-180,180)
+    return (degs + 180) % 360 - 180
+
 
 def Rot(angle, axis):
     # calculate the rotation matrix for a given angle and axis using Rodrigues' formula
@@ -41,6 +45,11 @@ class SimpleArm:
         self.link_lengths = link_lengths
         self.n = len(link_lengths)
         self.angles = [0]*self.n 
+
+        # ————— NEW: per-joint hard limits (±45°) —————
+        self.joint_min = [-np.pi/4] * self.n
+        self.joint_max = [ np.pi/4] * self.n
+        # ———————————————————————————————————————
 
         self.Jl = np.zeros((self.n+1, 3)) 
         for i in range(1,self.n + 1):
@@ -83,7 +92,7 @@ class SimpleArm:
         target = self.preprocess_target(target.copy())
         max_iters = 1000
         tol       = 1e-3
-        alpha     = 0.1
+        alpha2     = 0.1
 
         target = np.array(target)
 
@@ -104,7 +113,7 @@ class SimpleArm:
                 print(f"IK converged in {it} iterations (error {err_norm:.4f})")
                 break
             if err_norm > prev_err:
-                alpha *= 0.5
+                alpha2 *= 0.5
             prev_err = err_norm
             J2D = self.VelocityJacobian()[:2, :]             
             # —————————————————————————————————————————————————————————
@@ -114,24 +123,31 @@ class SimpleArm:
                 JJt   = J2D @ J2D.T
                 A     = JJt + (self.lam**2)*np.eye(2)
                 invA  = np.linalg.inv(A)
-                delta = self.alpha * (J2D.T @ (invA @ error))
+                delta = alpha2 * (J2D.T @ (invA @ error))
             else:
-                delta = self.alpha * (J2D.T @ error)
+                delta = alpha2 * (J2D.T @ error)
 
             # ❄️ freeze the first `activeJoint` joints:
             delta[:activeJoint] = 0
 
-            # apply & wrap angles for all joints
+            
+            # apply, wrap, clamp & FK-update per joint
             for i in range(self.n):
                 a = self.angles[i] + delta[i]
-                self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+                w = np.arctan2(np.sin(a), np.cos(a))
+                # clamp to [joint_min, joint_max]
+                self.angles[i] = np.clip(w,
+                                        self.joint_min[i],
+                                        self.joint_max[i])
+                # update forward kinematics so joint i+1 sees this
+                self.FK()
+
+
             # —————————————————————————————————————————————————————————
 
         else:
             print(f"IK did not converge (final error {err_norm:.4f})")
 
-        self.angles = [np.arctan2(np.sin(a + d), np.cos(a + d))
-                for a, d in zip(self.angles, delta)]
         return self.angles
 
     
@@ -164,10 +180,15 @@ class SimpleArm:
             # ❄️ freeze the first `activeJoint` joints:
             delta[:activeJoint] = 0
 
-            # apply & wrap angles for all joints
+            
+            # apply, wrap, clamp & FK-update per joint
             for i in range(self.n):
                 a = self.angles[i] + delta[i]
-                self.angles[i] = np.arctan2(np.sin(a), np.cos(a))
+                w = np.arctan2(np.sin(a), np.cos(a))
+                self.angles[i] = np.clip(w,
+                                        self.joint_min[i],
+                                        self.joint_max[i])
+                self.FK()  # propagate to downstream joints
             # —————————————————————————————————————————————————————————
 
         else:
@@ -210,9 +231,15 @@ class SimpleArm:
         
         delta[:activeJoint] = 0
 
-        # apply Δθ and wrap into [−π,π]
-        self.angles = [np.arctan2(np.sin(a+da), np.cos(a+da))
-        for a, da in zip(self.angles, delta)]
+        for i in range(self.n):
+            w = np.arctan2(np.sin(self.angles[i] + delta[i]),
+                           np.cos(self.angles[i] + delta[i]))
+            # clamp
+            w = np.clip(w, self.joint_min[i], self.joint_max[i])
+            # write back & update FK so joint i+1 uses this
+            self.angles[i] = w
+            self.FK()
+
 
         self.prev_err   = err_norm
         self.iter_count += 1
@@ -320,10 +347,17 @@ def OnCurrentJoint(widget, event):
 
 
 def LeftButtonPress(evt):
-    global IK_target, arm, plt, MODE
+    global IK_target, arm, plt, MODE, mode_label
+
     picked = evt.picked3d
     if picked is not None:
         IK_target = np.array(picked)
+        # ————— NEW: set per-joint limits ±45° around current angles —————
+        for i in range(arm.n):
+            base = arm.angles[i]
+            arm.joint_min[i] = base - np.pi/4
+            arm.joint_max[i] = base + np.pi/4
+        # ————————————————————————————————————————————————————————
 
         plt.remove("Sphere")
         sph = vd.Sphere(pos=IK_target, r=0.05, c='b')

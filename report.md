@@ -156,7 +156,9 @@ The Jacobian-transpose IK solver adjusts joint angles to minimize the distance b
 *Figure 4:* From another angle, the arm remains fully stretched and cannot close the remaining gap to the target.
 
 
-# Gauss–Newton vs. Jacobian-Transpose IK: Implementation, GUI & Convergence
+# Task 3: Gauss-Newton-based IK (the Jacobian Inverse method)
+
+## Task 3.1 : Gauss–Newton vs. Jacobian-Transpose IK: Implementation, GUI & Convergence
 
 ## 1. Implementation & GUI Adaptations  
 - **New solver**: Added `IK_GN()` alongside the existing `IK_JT()` in `SimpleArm`.  
@@ -291,3 +293,70 @@ With our 4-joint arm, clicking any reachable point now produces a smooth, unique
 [▶ example using Gradient Descent-based IK when solution is non redundant](videoes/freeze_demo1.mkv)
 
 [▶ example using Gauss-Newton-based IK  when solution is redundant ](videoes/freeze_demo2.mkv)
+
+
+
+Great! Based on your working code, here's a **structured and concise explanation** you can use in your report for **Task 4.1**, including the required phrase: “*Explain your approach in the report*.” I've included markdown formatting, an explanation of your approach, and placeholders for your videos:
+
+
+## Task 4: Extensions
+
+Here is a polished explanation you can add under **Task 4.1** in your report, including everything you mentioned (freezing first two joints, setting ±45° limits, behavior after repeated clicks), and referencing your demonstration video:
+
+---
+
+## Task 4.1: Enforcing Joint Angle Limits
+
+To restrict unrealistic joint movements, I implemented **per-joint angle limits** in the `SimpleArm` class.
+These constraints ensure that each joint angle stays within a **±45° range** (i.e., from -π/4 to +π/4 radians) relative to its current position.
+
+---
+
+### 🔍 Explanation of My Approach
+
+* I added `joint_min` and `joint_max` lists to store joint angle limits:
+
+  ```python
+  self.joint_min = [-np.pi/4] * self.n
+  self.joint_max = [ np.pi/4] * self.n
+  ```
+* Whenever the user clicks a target with the left mouse button, I dynamically update these limits to be centered around the **current angle** of each joint:
+
+  ```python
+  for i in range(arm.n):
+      base = arm.angles[i]
+      arm.joint_min[i] = base - np.pi/4
+      arm.joint_max[i] = base + np.pi/4
+  ```
+* During IK updates (in all solvers), the new joint angle is **wrapped and clamped** to these limits:
+
+  ```python
+  w = np.arctan2(np.sin(a), np.cos(a))
+  self.angles[i] = np.clip(w, self.joint_min[i], self.joint_max[i])
+  ```
+
+Additionally, I **froze the first two joints** using the slider, so only the remaining joints were free to move.
+
+---
+
+### 🎥 Demonstration
+
+The following short video demonstrates the joint limits in action:
+
+📹 [▶ Joint Limit & Freezing Demo](videos/task4_1.mkv)
+
+**Description:**
+
+* I **froze the first two joints** using the joint slider.
+* Then I set a target **around 90 degrees**, which would normally require a large rotation.
+* Because only the last two joints could move, and they were **limited to ±45°**, the arm moved as far as allowed—**45° rotation from the starting pose**—toward the target.
+* When I clicked again **in the same area**, the new joint limits were applied relative to the current pose, allowing a second movement that brought the end-effector even **closer to the target**, reaching approximately 90° in two limited steps.
+
+This confirms that:
+
+* The solver respects the ±45° limit per joint.
+* The limits update dynamically with each click.
+* The behavior adapts gradually based on the current joint configuration.
+
+---
+
