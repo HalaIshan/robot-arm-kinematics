@@ -39,20 +39,26 @@ def draw_manipulability_ellipse(arm, plt, scale=0.5, n_samples=100):
 
     # 5) SVD on weighted Jacobian
     U, S, _ = np.linalg.svd(Jw2D, full_matrices=False)
-
-    # 6) sample and draw the ellipse
     origin = arm.Jw[-1][:2]
-    theta  = np.linspace(0, 2*np.pi, n_samples)
+
+    if S[1] < 1e-6:
+        # rank-1 → draw a single line along the principal direction
+        vec  = U[:,0] * S[0] * scale
+        line = vd.Line([[ *origin, 0 ], [ *(origin + vec), 0 ]])
+        line.c("purple").lw(3).name = "Ellipsoid"
+        plt += line
+        return
+
+    # otherwise (rank-2) fall back to your normal ellipse‐sampling:
     pts = []
-    for t in theta:
+    for t in np.linspace(0, 2*np.pi, n_samples):
         local = np.array([S[0]*np.cos(t), S[1]*np.sin(t)]) * scale
         world = origin + U @ local
-        pts.append([float(world[0]), float(world[1]), 0])
-
-    ellipse = vd.Line(pts, closed=True)
-    ellipse.c("purple").alpha(0.4).lw(2)
+        pts.append([ *world, 0 ])
+    ellipse = vd.Line(pts, closed=True).c("purple").alpha(0.4).lw(2)
     ellipse.name = "Ellipsoid"
     plt += ellipse
+
 
 def Rot(angle, axis):
     # calculate the rotation matrix for a given angle and axis using Rodrigues' formula
@@ -68,7 +74,7 @@ def Rot(angle, axis):
     return R
     
 class SimpleArm:
-    def __init__(self,  link_lengths=None):
+    def __init__(self,  link_lengths=None, joint_types=None):
         # a simple arm with n unit length links connected by hinge joints
         # The base is assumed to be at the origin
         # The joints are assumed to be at the end of each link, with the first joint at the base and the last joint at the end effector
@@ -83,14 +89,19 @@ class SimpleArm:
 
         if link_lengths is None:
             link_lengths = [1, 1, 1] 
+        if joint_types is None:
+            joint_types = ['R'] * len(link_lengths)
         self.link_lengths = link_lengths
+        self.joint_types = joint_types         # list of 'R' or 'P'
+        self.link_params = link_lengths        # for R: link length; for P: max extension
         self.n = len(link_lengths)
         self.angles = [0]*self.n 
 
-        # ————— NEW: per-joint hard limits (±45°) —————
-        self.joint_min = [-np.pi/4] * self.n
-        self.joint_max = [ np.pi/4] * self.n
-        # ———————————————————————————————————————
+        # joint limits in same units:
+        self.joint_min   = [-np.pi/4 if jt=='R' else -lp
+                        for jt,lp in zip(self.joint_types, self.link_params)]
+        self.joint_max   = [ np.pi/4 if jt=='R' else  lp
+                        for jt,lp in zip(self.joint_types, self.link_params)]
 
         # ————— DISABLE limits for now (full 360°) —————
         #self.joint_min = [-2*np.pi] * self.n
@@ -103,18 +114,25 @@ class SimpleArm:
         self.Jw = np.zeros((self.n+1, 3)) 
         self.FK()
 
-    def FK(self, angles=None): 
+    def FK(self, angles=None):
         if angles is not None:
             self.angles = angles
-        
         Ri = np.eye(3)
-        self.Jw[0, :] = np.array([0, 0, 0]) 
-
-        for i in range(1, self.n + 1):
-            Ri = Rot(self.angles[i - 1], [0, 0, 1]) @ Ri
-            self.Jw[i, :] = Ri @ self.Jl[i, :] + self.Jw[i - 1, :]
-
-        return self.Jw[-1,:] 
+        self.Jw[0,:] = np.zeros(3)
+        for i in range(self.n):
+            jt = self.joint_types[i]
+            val = self.angles[i]
+            if jt == 'R':
+                Ri = Rot(val, [0,0,1]) @ Ri
+                disp = self.link_params[i]
+            else:  # 'P'
+                # no extra rotation
+                disp = val              # linear displacement
+            # translate along local x-axis by disp:
+            translation = Ri @ np.array([disp,0,0])
+            self.Jw[i+1,:] = self.Jw[i,:] + translation
+        return self.Jw[-1,:]
+ 
         
 
 
@@ -256,6 +274,7 @@ class SimpleArm:
 
     def init_IK(self, target, mode):
         """Prepare a manual‐step run."""
+        global activeJoint, plt
         import numpy as np
         self.target     = self.preprocess_target(np.array(target))
         self.mode       = mode         # 'JT' or 'GN'
@@ -302,23 +321,29 @@ class SimpleArm:
         return False
 
     
-    def VelocityJacobian(self, angles=None):
-        # calculate the velocity jacobian of the arm
-        # return a 3x3 numpy array
-        if angles is not None:
-            self.FK(angles)
-        else:
-            self.FK()
-
-        z_axis = np.array([0, 0, 1])
-        p_end = self.Jw[-1, :]
-        J = np.zeros((3, self.n))
-
+    def VelocityJacobian(self):
+        # ensure self.Jw is up-to-date
+        self.FK()
+        z     = np.array([0,0,1])
+        p_end = self.Jw[-1,:]
+        J     = np.zeros((3,self.n))
+        # also track Ri per joint for prismatic axes
+        Ri = np.eye(3)
         for i in range(self.n):
-            p_i = self.Jw[i, :]
-            J[:, i] = np.cross(z_axis, p_end - p_i)
-            
+            jt = self.joint_types[i]
+            if jt == 'R':
+                # revolute: axis z
+                p_i = self.Jw[i,:]
+                J[:,i] = np.cross(z, p_end - p_i)
+                # update Ri for next link
+                Ri = Rot(self.angles[i], [0,0,1]) @ Ri
+            else:
+                # prismatic: translation along local x-axis
+                axis = Ri @ np.array([1,0,0])
+                J[:,i] = axis
+                # Ri unchanged
         return J
+
     
 
     def draw(self):
@@ -326,8 +351,11 @@ class SimpleArm:
         vd_arm = vd.Assembly()
         vd_arm += vd.Sphere(pos = self.Jw[0,:], r=0.05 , c=joint_colors[0])
         for i in range(1,self.n+1):
-            vd_arm += vd.Cylinder(pos = [self.Jw[i-1,:], self.Jw[i,:]], r=0.02)
-            vd_arm += vd.Sphere(pos = self.Jw[i,:], r=0.05, c=joint_colors[i])
+            p0 = self.Jw[i-1]
+            p1 = self.Jw[i]
+            if np.linalg.norm(p1 - p0) > 1e-6:
+                vd_arm += vd.Cylinder(pos=[p0, p1], r=0.02)
+            vd_arm += vd.Sphere(pos=p1, r=0.05, c=joint_colors[i])
         return vd_arm
     
         
@@ -382,6 +410,10 @@ def reset_label():
 
 def OnSliderAngle(widget, event):
     global activeJoint, arm, plt
+    try:
+        plt.remove("Ellipsoid")
+    except:
+        pass
     arm.angles[activeJoint] = widget.value
     arm.FK()
 
@@ -397,8 +429,32 @@ def OnSliderAngle(widget, event):
 
 
 def OnCurrentJoint(widget, event):
-    activeJoint = round(widget.value)
+    global activeJoint, sliderAngle, arm, plt
+
+    # 1) Which joint did we just select?
+    activeJoint = int(round(widget.value))
+    jt = arm.joint_types[activeJoint]
+
+    # 2) Grab the VTK slider repre­sentation
+    rep = sliderAngle.GetRepresentation()
+
+    # 3) If it’s revolute, keep the old [-π, π] range
+    if jt == 'R':
+        rep.SetMinimumValue(-np.pi)
+        rep.SetMaximumValue( np.pi)
+
+    # 4) If it’s prismatic, switch to [–L, L]
+    else:
+        L = arm.link_params[activeJoint]
+        rep.SetMinimumValue(-L)
+        rep.SetMaximumValue( L)
+
+    # 5) Finally, move the thumb to the current angle/extension
     sliderAngle.value = arm.angles[activeJoint]
+
+    # 6) Optional: redraw the slider if needed
+    plt.render()
+
 
 
 def LeftButtonPress(evt):
@@ -495,8 +551,11 @@ def OnKeyPress(evt):
 
 
 
-
-arm = SimpleArm(link_lengths=[1, 1, 1, 1]) 
+# 'R' for revolute, 'P' for prismatic
+arm = SimpleArm(
+    link_lengths=[1, 1, 1, 1],
+    joint_types = ['R','R','P','R']
+)
 plt = vd.Plotter()
 arm_actor = arm.draw()
 arm_actor.name = "ARM"

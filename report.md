@@ -436,3 +436,90 @@ Below is an example with **all joints at 0°** (the midpoint of ±45°), so ever
 As any joint approaches its ±45° limit, its \(w_i\) falls toward zero and the ellipse **shrinks** along that direction, visually capturing the reduction in manipulability imposed by the joint limits.
 
 ---
+
+
+## Task 4.3: Prismatic Joint Support
+
+In this extension, I enhanced `SimpleArm` to handle **prismatic** (sliding) joints alongside revolute ones. Below is a summary of what I did and how it interacts with the GUI.
+
+---
+
+### My Approach
+
+1. **Joint types & parameters**  
+   - Added a `joint_types` list (`'R'` or `'P'`) and `link_params` (for prismatic max extension).  
+2. **Forward kinematics & Jacobian**  
+   - Revolutes rotate + translate by fixed length; prismatic joints translate by their `angles[i]` value.  
+   - Jacobian columns use `z×(p_end–p_i)` for revolutes, and the local x-axis vector for prisms.  
+3. **Dynamic limit update**  
+   Originally I applied this to *every* joint:
+   ```python
+   for i in range(arm.n):
+       base = arm.angles[i]
+       arm.joint_min[i] = base - np.pi/4
+       arm.joint_max[i] = base + np.pi/4
+
+
+* **cons:** this indiscriminately applies a ±45° clamp to the prismatic joint as well, so with `link_lengths=[0.5,…]` the prismatic slider was being limited to ±0.785 m instead of specific control range because i migh want to limit a prismatic joint with range [-1,1] but keep the limitation for normal joint to be [-45,45].
+
+4. **Corrected dynamic limit logic**
+   To clamp revolutes to ±45° but keep prismatic joints at their true ±L range:
+
+   ```python
+   for i in range(arm.n):
+       if arm.joint_types[i] == 'R':
+           # revolute: ±45° around current angle
+           base = arm.angles[i]
+           arm.joint_min[i] = base - np.pi/4
+           arm.joint_max[i] = base + np.pi/4
+       else:  # 'P' (prismatic)
+           # prismatic: full [–L, +L] extension
+           L = arm.link_params[i]
+           arm.joint_min[i] = -L
+           arm.joint_max[i] =  L
+   ```
+
+   * This ensures the sliding joint can truly extend up to ±0.5 m, and revolutes remain in their ±45° window.
+
+5. **Interaction with GUI**
+
+   * The **Current joint** slider selects between R/P joints.
+   * The **Joint Angle** slider is reused for both: when a prismatic joint is active, its range switches to \[–L, +L]; when a revolute joint is active, it stays in \[–π, π].
+   * Clicking a new IK target updates the limits per the above logic, allowing the prismatic joint to fully extend before the revolutes move.
+
+---
+
+### Demonstration
+
+#### Example: Prismatic Joint Helping Under Revolute Limits
+
+```python
+arm = SimpleArm(
+    link_lengths=[1, 1, 1, 1],
+    joint_types = ['R','R','P','R']
+)
+````
+
+![Prismatic Joint Retraction](images/task4_3_prismatic_example.png)
+
+In this example, all revolute joints are clamped to ±45°, so they cannot rotate far enough to reach the blue target. To compensate, the IK solver **retracts** the prismatic joint (joint 2) by reducing its extension below its nominal length. This “shortening” moves the end effector closer to the target even though no revolute joint can swing wider.
+
+* **Initialization**: the prismatic joint starts at its full extension (1 m).
+* **After clicking the target**: revolutes hit their ±45° bounds, so the solver adjusts the prismatic joint’s displacement to shorten the link, bringing the tip nearer to the goal.
+
+This behavior confirms that prismatic DOFs integrate seamlessly: when rotation is insufficient, the sliding joint automatically retracts or extends (within its limits) to improve reach.
+
+---
+
+### 🎬 Slider Control Demo
+
+Below is a short video demonstrating how I interact with the GUI sliders:
+
+- **Current Joint** slider: selects which joint is active (revolute vs. prismatic)  
+- **Joint Angle / Prismatic Extension** slider: adjusts the selected joint’s rotation or slide  
+
+[▶️ Joint & Extension Slider Demo](videos/slider_control_demo.mkv)
+
+*In this video, you can see me move the “Current joint” slider to pick each joint in turn, and then use the second slider to rotate revolute joints or extend/retract the prismatic joint. The arm updates in real time, with the manipulability ellipse and Jacobian arrows redrawn after each adjustment.*  
+
+
