@@ -12,6 +12,47 @@ def wrap_deg_180(degs):
     # maps any angle to [-180,180)
     return (degs + 180) % 360 - 180
 
+def draw_manipulability_ellipse(arm, plt, scale=0.5, n_samples=100):
+    """
+    Draw a 2D manipulability ellipse *with joint-limit weighting*.
+    Columns of J2D are scaled by w_i in [0,1] measuring proximity to ±limit.
+    """
+    # 1) remove any existing ellipse
+    try: plt.remove("Ellipsoid")
+    except: pass
+    # 2) compute raw 2×n Jacobian and mask frozen joints
+    J2D = arm.VelocityJacobian()[:2, :].copy()
+    J2D[:, :activeJoint] = 0
+
+    # 3) build per-joint weights w_i ∈ [0,1]
+    weights = []
+    for i, θ in enumerate(arm.angles):
+        mn, mx = arm.joint_min[i], arm.joint_max[i]
+        mid     = 0.5*(mn + mx)
+        half    = 0.5*(mx - mn)
+        w       = max(0.0, (half - abs(θ - mid))/half)
+        weights.append(w)
+    W = np.diag(weights)
+
+    # 4) form weighted Jacobian
+    Jw2D = J2D @ W
+
+    # 5) SVD on weighted Jacobian
+    U, S, _ = np.linalg.svd(Jw2D, full_matrices=False)
+
+    # 6) sample and draw the ellipse
+    origin = arm.Jw[-1][:2]
+    theta  = np.linspace(0, 2*np.pi, n_samples)
+    pts = []
+    for t in theta:
+        local = np.array([S[0]*np.cos(t), S[1]*np.sin(t)]) * scale
+        world = origin + U @ local
+        pts.append([float(world[0]), float(world[1]), 0])
+
+    ellipse = vd.Line(pts, closed=True)
+    ellipse.c("purple").alpha(0.4).lw(2)
+    ellipse.name = "Ellipsoid"
+    plt += ellipse
 
 def Rot(angle, axis):
     # calculate the rotation matrix for a given angle and axis using Rodrigues' formula
@@ -47,13 +88,13 @@ class SimpleArm:
         self.angles = [0]*self.n 
 
         # ————— NEW: per-joint hard limits (±45°) —————
-        #self.joint_min = [-np.pi/4] * self.n
-        #self.joint_max = [ np.pi/4] * self.n
+        self.joint_min = [-np.pi/4] * self.n
+        self.joint_max = [ np.pi/4] * self.n
         # ———————————————————————————————————————
 
         # ————— DISABLE limits for now (full 360°) —————
-        self.joint_min = [-2*np.pi] * self.n
-        self.joint_max = [ 2*np.pi] * self.n
+        #self.joint_min = [-2*np.pi] * self.n
+        #self.joint_max = [ 2*np.pi] * self.n
         # ——————————————————————————————————————
 
         self.Jl = np.zeros((self.n+1, 3)) 
@@ -92,7 +133,6 @@ class SimpleArm:
         # calculate the inverse kinematics of the arm
         # target is the position of the end effector in world coordinates
         # return a list of joint angles
-
         print(">>> Running Jacobian-Transpose IK <<<")
         target = self.preprocess_target(target.copy())
         max_iters = 1000
@@ -225,7 +265,6 @@ class SimpleArm:
 
     def step_IK(self):
         """Perform exactly one JT/GN iteration. Returns True when done."""
-        global activeJoint
         tol = 1e-3
         p_end    = self.FK()
         error    = self.target[:2] - p_end[:2]
@@ -283,6 +322,7 @@ class SimpleArm:
     
 
     def draw(self):
+        global joint_colors
         vd_arm = vd.Assembly()
         vd_arm += vd.Sphere(pos = self.Jw[0,:], r=0.05 , c=joint_colors[0])
         for i in range(1,self.n+1):
@@ -311,40 +351,6 @@ def draw_jacobian_arrows(arm, plt, scale=0.3):
                          c=joint_colors[i % len(joint_colors)])
         arrow.name = f"JointCol_{i}"
         plt += arrow
-
-def draw_manipulability_ellipse(arm, plt, scale=0.5, n_samples=100):
-    """
-    Draw a 2D manipulability ellipse at the end-effector by sampling points
-    and drawing a closed Line (since vd.Ellipse isn’t available).
-    """
-    # remove previous ellipse if any
-    try:
-        plt.remove("Ellipsoid")
-    except:
-        pass
-
-    # 1) compute 2×n Jacobian and SVD
-    J2D = arm.VelocityJacobian()[:2, :]
-    J2D[:, :activeJoint] = 0        # mask out frozen joints
-    U, S, _ = np.linalg.svd(J2D, full_matrices=False)
-
-    # 2) sample the parametric ellipse
-    theta = np.linspace(0, 2*np.pi, n_samples)
-    origin = arm.Jw[-1][:2]
-    pts = []
-    for t in theta:
-        local = np.array([S[0]*np.cos(t), S[1]*np.sin(t)]) * scale
-        world = origin + U @ local
-        pts.append([float(world[0]), float(world[1]), 0])
-
-    # 3) draw as a closed line
-    ellipse = vd.Line(pts, closed=True)  # pass closed=True here
-    ellipse.c("purple").alpha(0.4).lw(2)
-    ellipse.name = "Ellipsoid"
-    plt += ellipse
-
-
-
 
 
 
@@ -391,7 +397,6 @@ def OnSliderAngle(widget, event):
 
 
 def OnCurrentJoint(widget, event):
-    global activeJoint
     activeJoint = round(widget.value)
     sliderAngle.value = arm.angles[activeJoint]
 
@@ -403,10 +408,10 @@ def LeftButtonPress(evt):
     if picked is not None:
         IK_target = np.array(picked)
         # ————— NEW: set per-joint limits ±45° around current angles —————
-        #for i in range(arm.n):
-        #    base = arm.angles[i]
-        #    arm.joint_min[i] = base - np.pi/4
-        #    arm.joint_max[i] = base + np.pi/4
+        for i in range(arm.n):
+            base = arm.angles[i]
+            arm.joint_min[i] = base - np.pi/4
+            arm.joint_max[i] = base + np.pi/4
         # ————————————————————————————————————————————————————————
 
         plt.remove("Sphere")

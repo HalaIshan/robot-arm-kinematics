@@ -402,3 +402,37 @@ i have here three examples:
    ulability ellipse (axis lengths and orientation) is identical, confirming consistency across solvers.
 
 ---
+
+### ⚙️ Extension: Joint-Limit–Aware Manipulability
+
+After re-enabling the ±45° per-joint limits, I updated `draw_manipulability_ellipse` to **weight each column** of the Jacobian by how close its joint is to the mid-range. 
+Concretely:
+
+- For each joint \(i\), compute  
+  ```python
+  mid_i      = (joint_min[i] + joint_max[i]) / 2
+  half_range = (joint_max[i] - joint_min[i]) / 2
+  w_i        = max(0.0, (half_range - abs(angle[i] - mid_i)) / half_range)
+
+* When the joint is at the midpoint, `w_i = 1`.
+
+* As the joint angle approaches either ±45° limit, `w_i` falls toward 0.
+
+* **Form the weighted Jacobian**:
+
+  ```python
+  W   = np.diag([w_0, w_1, …, w_{n-1}])
+  Jw2D = J2D @ W
+  ```
+
+* **SVD and draw** exactly as before, using singular values/vectors of `Jw2D`.
+
+
+
+Below is an example with **all joints at 0°** (the midpoint of ±45°), so every \(w_i=1\) and the weighted ellipsoid **coincides** with the original unlimited-motion case:
+
+![Weighted ellipsoid at mid-range](images/task4_2_weighted_mid.png)
+
+As any joint approaches its ±45° limit, its \(w_i\) falls toward zero and the ellipse **shrinks** along that direction, visually capturing the reduction in manipulability imposed by the joint limits.
+
+---
