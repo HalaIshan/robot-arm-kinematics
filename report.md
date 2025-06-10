@@ -284,15 +284,15 @@ for i in range(self.n):
 
 With our 4-joint arm, clicking any reachable point now produces a smooth, unique bend pattern—no arbitrary “wriggle” in the extra DOFs.
 
-[▶ Redundant-Arm DLS IK Demo](videoes/task3_2_dls_demo.mkv)
+[▶ Redundant-Arm DLS IK Demo](videos/task3_2_dls_demo.mkv)
 
 
 
  **Note:** I initially omitted the “Current joint” freeze feature—so the first *k* joints (slider value) moved when they should have stayed fixed. This has now been corrected in `IK_JT()`, `IK_GN()`, and `step_IK()`. Below is a short video demonstrating the slider locking the specified joints during IK.
 
-[▶ example using Gradient Descent-based IK when solution is non redundant](videoes/freeze_demo1.mkv)
+[▶ example using Gradient Descent-based IK when solution is non redundant](videos/freeze_demo1.mkv)
 
-[▶ example using Gauss-Newton-based IK  when solution is redundant ](videoes/freeze_demo2.mkv)
+[▶ example using Gauss-Newton-based IK  when solution is redundant ](videos/freeze_demo2.mkv)
 
 
 
