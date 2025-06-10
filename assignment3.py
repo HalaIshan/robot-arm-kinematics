@@ -47,9 +47,14 @@ class SimpleArm:
         self.angles = [0]*self.n 
 
         # ————— NEW: per-joint hard limits (±45°) —————
-        self.joint_min = [-np.pi/4] * self.n
-        self.joint_max = [ np.pi/4] * self.n
+        #self.joint_min = [-np.pi/4] * self.n
+        #self.joint_max = [ np.pi/4] * self.n
         # ———————————————————————————————————————
+
+        # ————— DISABLE limits for now (full 360°) —————
+        self.joint_min = [-2*np.pi] * self.n
+        self.joint_max = [ 2*np.pi] * self.n
+        # ——————————————————————————————————————
 
         self.Jl = np.zeros((self.n+1, 3)) 
         for i in range(1,self.n + 1):
@@ -147,7 +152,7 @@ class SimpleArm:
 
         else:
             print(f"IK did not converge (final error {err_norm:.4f})")
-
+        draw_manipulability_ellipse(self, plt, scale=0.5)
         return self.angles
 
     
@@ -155,19 +160,25 @@ class SimpleArm:
         print(">>> Running Gauss-Newton / DLS IK <<<")
         target = self.preprocess_target(target.copy())
         max_iters, tol = 1000, 1e-3
+        prev_err = np.inf
 
         for it in range(max_iters):
             p_end   = self.FK()
             error   = target[:2] - p_end[:2]
             err_norm = np.linalg.norm(error)
+            # 1) Converged?
             if err_norm < tol:
-                print(f"DLS-GN converged in {it} iters (err {err_norm:.4f})")
+                print(f"GN converged in {it} iterations (error {err_norm:.4f})")
                 break
 
-            J2D = self.VelocityJacobian()[:2, :]      # 2×n
+            # 2) Stalled?
+            if abs(prev_err - err_norm) < 1e-6:
+                print(f"GN stalled after {it} iterations (error {err_norm:.4f})")
+                break
 
-            # —————————————————————————————————————————————————————————
-            #  modified IK_GN snippet — freeze first `activeJoint` DOFs
+            prev_err = err_norm
+            # 3) Compute delta…
+            J2D = self.VelocityJacobian()[:2, :]      # 2×n
             free_joints = self.n - activeJoint
             if free_joints > 2:
                 JJt   = J2D @ J2D.T
@@ -177,23 +188,27 @@ class SimpleArm:
             else:
                 delta = self.alpha * (np.linalg.pinv(J2D) @ error)
 
-            # ❄️ freeze the first `activeJoint` joints:
             delta[:activeJoint] = 0
 
-            
-            # apply, wrap, clamp & FK-update per joint
+            # 4) Tiny‐step?
+            if np.linalg.norm(delta) < 1e-6:
+                print(f"GN Δθ too small after {it} iterations (error {err_norm:.4f})")
+                break
+
+            # 5) Apply it
             for i in range(self.n):
                 a = self.angles[i] + delta[i]
                 w = np.arctan2(np.sin(a), np.cos(a))
                 self.angles[i] = np.clip(w,
                                         self.joint_min[i],
                                         self.joint_max[i])
-                self.FK()  # propagate to downstream joints
-            # —————————————————————————————————————————————————————————
+                self.FK()  
 
         else:
             print(f"DLS-GN did not converge (final err {err_norm:.4f})")
-
+        
+        # draw ellipse exactly once at the final pose
+        draw_manipulability_ellipse(self, plt, scale=0.5)
         return self.angles
 
 
@@ -217,6 +232,7 @@ class SimpleArm:
         err_norm = np.linalg.norm(error)
         if err_norm < tol:
             print(f"{self.mode} converged in {self.iter_count} steps")
+            draw_manipulability_ellipse(self, plt, scale=0.5)
             return True
 
         J2D = self.VelocityJacobian()[:2, :]
@@ -227,6 +243,7 @@ class SimpleArm:
 
         if np.linalg.norm(delta) < 1e-4:
             print(f"{self.mode} Δθ too small at step {self.iter_count}")
+            draw_manipulability_ellipse(self, plt, scale=0.5)
             return True
         
         delta[:activeJoint] = 0
@@ -295,6 +312,39 @@ def draw_jacobian_arrows(arm, plt, scale=0.3):
         arrow.name = f"JointCol_{i}"
         plt += arrow
 
+def draw_manipulability_ellipse(arm, plt, scale=0.5, n_samples=100):
+    """
+    Draw a 2D manipulability ellipse at the end-effector by sampling points
+    and drawing a closed Line (since vd.Ellipse isn’t available).
+    """
+    # remove previous ellipse if any
+    try:
+        plt.remove("Ellipsoid")
+    except:
+        pass
+
+    # 1) compute 2×n Jacobian and SVD
+    J2D = arm.VelocityJacobian()[:2, :]
+    J2D[:, :activeJoint] = 0        # mask out frozen joints
+    U, S, _ = np.linalg.svd(J2D, full_matrices=False)
+
+    # 2) sample the parametric ellipse
+    theta = np.linspace(0, 2*np.pi, n_samples)
+    origin = arm.Jw[-1][:2]
+    pts = []
+    for t in theta:
+        local = np.array([S[0]*np.cos(t), S[1]*np.sin(t)]) * scale
+        world = origin + U @ local
+        pts.append([float(world[0]), float(world[1]), 0])
+
+    # 3) draw as a closed line
+    ellipse = vd.Line(pts, closed=True)  # pass closed=True here
+    ellipse.c("purple").alpha(0.4).lw(2)
+    ellipse.name = "Ellipsoid"
+    plt += ellipse
+
+
+
 
 
 
@@ -353,10 +403,10 @@ def LeftButtonPress(evt):
     if picked is not None:
         IK_target = np.array(picked)
         # ————— NEW: set per-joint limits ±45° around current angles —————
-        for i in range(arm.n):
-            base = arm.angles[i]
-            arm.joint_min[i] = base - np.pi/4
-            arm.joint_max[i] = base + np.pi/4
+        #for i in range(arm.n):
+        #    base = arm.angles[i]
+        #    arm.joint_min[i] = base - np.pi/4
+        #    arm.joint_max[i] = base + np.pi/4
         # ————————————————————————————————————————————————————————
 
         plt.remove("Sphere")
@@ -381,10 +431,11 @@ def LeftButtonPress(evt):
             draw_jacobian_arrows(arm, plt)
 
         reset_label()
-        plt.render()
 
     else:
         mode_label.text(mode_label.text() +"\n⚠️ No valid point picked — click on the plane or geometry.")
+    plt.render()
+
 
 
 
@@ -410,6 +461,10 @@ def OnKeyPress(evt):
                 "⚠️ Click to set a GN target first."
             )
             return
+        try:
+            plt.remove("Ellipsoid")
+        except:
+            pass
         if MODE == 'GN':
             done = arm.step_IK()
             if done:

@@ -335,7 +335,7 @@ These constraints ensure that each joint angle stays within a **±45° range** (
   self.angles[i] = np.clip(w, self.joint_min[i], self.joint_max[i])
   ```
 
-Additionally, I **froze the first two joints** using the slider, so only the remaining joints were free to move.
+
 
 ---
 
@@ -358,5 +358,47 @@ This confirms that:
 * The limits update dynamically with each click.
 * The behavior adapts gradually based on the current joint configuration.
 
+**note** the code work also in guassan newton based IK and in all cases
+
 ---
 
+## Task 4.2: Manipulability Ellipsoid Visualization
+
+**The manipulability ellipsoid** at a given pose is the set of end-effector velocities achievable by unit-norm joint-velocity vectors. In 2D, it appears as an ellipse centered at the end-effector, with its axes aligned with the singular vectors of the 2×n Jacobian, and scaled by the corresponding singular values.
+
+---
+
+### ✨ Approach
+
+1. **Restore full 360° motion** by disabling any ±45° clamps on the joints.  
+2. **After IK completes** (Jacobian-Transpose or Gauss-Newton), compute the 2×n planar Jacobian:
+   ```python
+   J2D = arm.VelocityJacobian()[:2, :]
+
+
+3. **Perform SVD**:
+
+   ```python
+   U, S, _ = np.linalg.svd(J2D, full_matrices=False)
+   
+4. **Draw a 2D ellipse** centered at the end-effector (`arm.Jw[-1][:2]`) with major/minor radii `S[0]`, `S[1]` and directions `U[:,0]`, `U[:,1]`.
+
+---
+
+### 🎥 Demonstration the result
+i have here three examples:
+
+1. **JT solver, one joint frozen (3 free joints)**
+   ![JT: joint 1 frozen, 3 free joints](images/task4_2_jt_frozen.png)
+   Here the “Current joint” slider is set to **1**, so joint 0 is frozen and **3** joints remain free. The Jacobian remains rank 2 and the ellipsoid is a proper 2D shape, oriented along the dominant motion directions.
+
+2. **JT solver, all joints free (4 free joints)**
+   ![JT: all joints free, 4 free joints](images/task4_2_jt_free.png)
+   With the slider at **0**, no joints are frozen—**4** free joints produce a full-rank Jacobian and a larger ellipse, reflecting four DOFs projecting into 2D velocity space.
+
+3. **GN solver, all joints free (converged in 67 steps)**
+   ![GN: all joints free, converged in 67 steps](images/task4_2_gn_free.png)
+   After Gauss–Newton converges in **67** steps, the final pose matches JT’s result. The manip-
+   ulability ellipse (axis lengths and orientation) is identical, confirming consistency across solvers.
+
+---
