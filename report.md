@@ -480,6 +480,7 @@ In this extension, I enhanced `SimpleArm` to handle **prismatic** (sliding) join
    ```
 
    * This ensures the sliding joint can truly extend up to ±0.5 m, and revolutes remain in their ±45° window.
+    we can also replace L = arm.link_params[i] with any per-joint range if desired.
 
 5. **Interaction with GUI**
 
